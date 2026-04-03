@@ -1,0 +1,244 @@
+---
+title: "Kubernetes Integration (CKS)"
+description: "Deploy and manage Kubernetes clusters on CloudStack using CloudStack Kubernetes Service (CKS)."
+---
+
+CloudStack Kubernetes Service (CKS) is a built-in plugin that provisions and manages Kubernetes clusters directly on top of CloudStack compute and networking infrastructure. CKS handles the full cluster lifecycle: provisioning VMs for control plane, etcd, and worker nodes; configuring networking and load balancers; and managing cluster upgrades and scaling operations.
+
+## How CKS works
+
+CKS creates a dedicated isolated network for each cluster using the `DefaultNetworkOfferingforKubernetesService` network offering (configurable via `cloud.kubernetes.cluster.network.offering`). Each node in the cluster is a CloudStack VM launched from a Kubernetes-compatible ISO/template. The kube-apiserver is exposed through a CloudStack public IP with port forwarding rules managed automatically by the service.
+
+The service supports two cluster types:
+
+- **CloudManaged**: CKS provisions and manages all nodes from CloudStack templates. Supports full lifecycle operations including scale, upgrade, and auto-scale.
+- **ExternalManaged**: An existing Kubernetes cluster is imported and registered with CloudStack. Lifecycle operations are limited.
+
+## Prerequisites
+
+Before deploying a Kubernetes cluster, ensure the following are in place:
+
+<Steps>
+  <Step title="Enable the CKS plugin">
+    Set the global configuration key `cloud.kubernetes.service.enabled` to `true`. A management server restart is required after changing this setting.
+  </Step>
+  <Step title="Register a Kubernetes supported version">
+    Each Kubernetes version must be registered with an associated ISO that contains the binaries for offline installation. Use `addKubernetesSupportedVersion` to register a version, specifying `semanticversion`, `name`, `zoneid`, and the ISO id. The ISO must be accessible to the zone where clusters will be deployed.
+
+    Minimum resource requirements per node are enforced by the version: at least 2 vCPUs and 2048 MB RAM (matching the constants `MIN_KUBERNETES_CLUSTER_NODE_CPU = 2` and `MIN_KUBERNETES_CLUSTER_NODE_RAM_SIZE = 2048` in `KubernetesClusterService`).
+  </Step>
+  <Step title="Create service offerings">
+    Prepare service offerings for control plane nodes, worker nodes, and optionally etcd nodes. CKS accepts a per-node-type offering map via the `nodetypeofferingmap` parameter (available since 4.21.0), or a single `serviceofferingid` applied to all nodes.
+  </Step>
+  <Step title="Verify network offering">
+    Ensure the `DefaultNetworkOfferingforKubernetesService` network offering exists and is enabled, or configure an alternative with `cloud.kubernetes.cluster.network.offering`.
+  </Step>
+</Steps>
+
+## Kubernetes version management
+
+Supported versions are registered zone-wide or globally. Each version has a `State` of `Enabled` or `Disabled`. Only enabled versions can be used for new clusters.
+
+| API command | Description |
+|---|---|
+| `addKubernetesSupportedVersion` | Register a new Kubernetes version with an ISO |
+| `listKubernetesSupportedVersions` | List registered versions and their state |
+| `updateKubernetesSupportedVersion` | Enable or disable a registered version |
+| `deleteKubernetesSupportedVersion` | Remove a version (not possible if clusters are using it) |
+
+<Note>
+High availability (multi-control-plane) requires Kubernetes version 1.16.0 or later, enforced by the constant `MIN_KUBERNETES_VERSION_HA_SUPPORT = "1.16.0"` in `KubernetesClusterService`.
+</Note>
+
+## Deploying a cluster
+
+Use the `createKubernetesCluster` API command or the CloudStack UI to deploy a new cluster.
+
+### Key parameters for `createKubernetesCluster`
+
+| Parameter | Required | Description |
+|---|---|---|
+| `name` | Yes | Name for the cluster |
+| `zoneid` | Yes | Availability zone where the cluster will be launched |
+| `kubernetesversionid` | No | ID of the registered Kubernetes version to use |
+| `serviceofferingid` | No | Service offering applied to all nodes (overridden by `nodetypeofferingmap`) |
+| `nodetypeofferingmap` | No | Map of node type (CONTROL, WORKER, ETCD) to service offering ID (since 4.21.0) |
+| `size` | No | Number of worker nodes |
+| `controlnodes` | No | Number of control plane nodes (use an odd number ≥ 3 for HA) |
+| `etcdnodes` | No | Number of dedicated etcd nodes |
+| `networkid` | No | Existing network to use; if omitted, CKS creates an isolated network |
+| `noderootdisksize` | No | Root disk size in GB per node (default: 8 GB) |
+| `keypair` | No | SSH key pair for node access |
+| `dockerregistryurl` | No | Private Docker registry URL (requires experimental features enabled) |
+
+<Tabs>
+  <Tab title="Single control plane">
+    ```bash
+    cloudstack-api createKubernetesCluster \
+      name="my-cluster" \
+      zoneid="<zone-uuid>" \
+      kubernetesversionid="<version-uuid>" \
+      serviceofferingid="<offering-uuid>" \
+      size=3
+    ```
+  </Tab>
+  <Tab title="HA control plane">
+    ```bash
+    cloudstack-api createKubernetesCluster \
+      name="my-ha-cluster" \
+      zoneid="<zone-uuid>" \
+      kubernetesversionid="<version-uuid>" \
+      serviceofferingid="<offering-uuid>" \
+      controlnodes=3 \
+      size=5
+    ```
+  </Tab>
+  <Tab title="Per-node-type offerings">
+    ```bash
+    cloudstack-api createKubernetesCluster \
+      name="my-cluster" \
+      zoneid="<zone-uuid>" \
+      kubernetesversionid="<version-uuid>" \
+      "nodetypeofferingmap[CONTROL][serviceofferingid]=<control-offering-uuid>" \
+      "nodetypeofferingmap[WORKER][serviceofferingid]=<worker-offering-uuid>" \
+      size=3
+    ```
+  </Tab>
+</Tabs>
+
+### Node types
+
+The `KubernetesClusterVO` entity tracks the following distinct node categories, each of which can have its own service offering and template:
+
+- **Control nodes** (`controlNodeCount`): Run the Kubernetes control plane components (API server, scheduler, controller manager).
+- **Worker nodes** (`nodeCount`): Run application workloads.
+- **Etcd nodes** (`etcdNodeCount`): Optional dedicated etcd members. Etcd port-forwarding rules start from port 50000 (`cloud.kubernetes.etcd.node.start.port`).
+
+## Cluster networking
+
+CKS integrates directly with CloudStack networking:
+
+- An isolated network is created per cluster using the configured network offering.
+- A public IP is acquired and a port forwarding rule is set up for the kube-apiserver (default port 6443).
+- Security group or network ACL rules are managed by CKS to allow inter-node and control plane communication.
+- The `endpoint` field on the cluster stores the public IP/URL used in the generated kubeconfig.
+
+## Scaling a cluster
+
+Use `scaleKubernetesCluster` to change the number of worker nodes or update the service offering for nodes.
+
+```bash
+cloudstack-api scaleKubernetesCluster \
+  id="<cluster-uuid>" \
+  size=5
+```
+
+### Parameters for `scaleKubernetesCluster`
+
+| Parameter | Description |
+|---|---|
+| `id` | ID of the cluster to scale |
+| `size` | New total number of worker nodes |
+| `nodeids` | Specific node VM IDs to remove (scale-in) |
+| `serviceofferingid` | New service offering to apply to nodes |
+| `nodetypeofferingmap` | Per-node-type service offering map |
+| `autoscalingenabled` | Enable or disable the cluster autoscaler |
+| `minsize` | Minimum worker node count for autoscaling |
+| `maxsize` | Maximum worker node count for autoscaling |
+
+<Note>
+Scale operations time out after 3600 seconds by default (`cloud.kubernetes.cluster.scale.timeout`). The maximum cluster size per account defaults to 10 nodes and is controlled by `cloud.kubernetes.cluster.max.size` (scoped per account).
+</Note>
+
+### Autoscaling
+
+CKS supports the Kubernetes Cluster Autoscaler. Enable it by passing `autoscalingenabled=true` along with `minsize` and `maxsize` to either `createKubernetesCluster` or `scaleKubernetesCluster`. The autoscaler flag and bounds are stored on the `kubernetes_cluster` table columns `autoscaling_enabled`, `minsize`, and `maxsize`.
+
+## Upgrading a cluster
+
+Use `upgradeKubernetesCluster` to upgrade a running cluster to a newer registered Kubernetes version. CKS performs the upgrade node-by-node using `kubeadm`.
+
+```bash
+cloudstack-api upgradeKubernetesCluster \
+  id="<cluster-uuid>" \
+  kubernetesversionid="<new-version-uuid>"
+```
+
+The upgrade operation:
+1. Drains each node before upgrading it.
+2. Upgrades control plane nodes first, then worker nodes.
+3. Retries up to 3 times on transient failures (configurable with `cloud.kubernetes.cluster.upgrade.retries`).
+4. Times out after 3600 seconds by default (`cloud.kubernetes.cluster.upgrade.timeout`).
+
+<Warning>
+You can only upgrade to the next minor version. Skipping minor versions (for example, 1.24 to 1.26) is not supported.
+</Warning>
+
+## Accessing a cluster
+
+Download the kubeconfig for an existing cluster using `getKubernetesClusterConfig`:
+
+```bash
+cloudstack-api getKubernetesClusterConfig id="<cluster-uuid>"
+```
+
+The response contains a base64-encoded kubeconfig. Decode and save it to use with `kubectl`:
+
+```bash
+cloudstack-api getKubernetesClusterConfig id="<cluster-uuid>" \
+  | jq -r '.getkubernetesclusterconfigresponse.clusterconfig.configdata' \
+  | base64 -d > ~/.kube/config
+```
+
+The kubeconfig points to the kube-apiserver endpoint stored in the cluster's `endpoint` field, which corresponds to the public IP acquired by CKS during cluster creation.
+
+## Adding and removing nodes
+
+CKS supports adding existing VMs or bare metal hosts to a cluster and removing specific nodes without a full scale operation.
+
+| API command | Description |
+|---|---|
+| `addVirtualMachinesToKubernetesCluster` | Add existing CloudStack VMs to a cluster as worker nodes |
+| `addNodesToKubernetesCluster` | Add external nodes (VMs or bare metal hosts) to a cluster |
+| `removeVirtualMachinesFromKubernetesCluster` | Remove specific VMs from a cluster |
+| `removeNodesFromKubernetesCluster` | Remove specific external nodes from a cluster |
+
+Node addition times out after 3600 seconds (`cloud.kubernetes.cluster.add.node.timeout`). Node removal times out after 900 seconds (`cloud.kubernetes.cluster.remove.node.timeout`).
+
+## Configuration reference
+
+All configuration keys are in the `Advanced` category and are dynamically changeable unless noted.
+
+| Configuration key | Default | Description |
+|---|---|---|
+| `cloud.kubernetes.service.enabled` | `true` | Enable or disable the CKS plugin (requires restart) |
+| `cloud.kubernetes.cluster.network.offering` | `DefaultNetworkOfferingforKubernetesService` | Network offering for cluster isolated networks |
+| `cloud.kubernetes.cluster.start.timeout` | `3600` | Timeout in seconds for cluster start operations |
+| `cloud.kubernetes.cluster.scale.timeout` | `3600` | Timeout in seconds for scale operations |
+| `cloud.kubernetes.cluster.upgrade.timeout` | `3600` | Timeout in seconds for upgrade operations |
+| `cloud.kubernetes.cluster.upgrade.retries` | `3` | Number of upgrade retries on transient failures |
+| `cloud.kubernetes.cluster.max.size` | `10` | Maximum cluster size per account |
+| `cloud.kubernetes.cluster.experimental.features.enabled` | `false` | Enable experimental features (e.g. Docker private registry) |
+| `cloud.kubernetes.etcd.node.start.port` | `50000` | Starting port for etcd node port-forwarding rules |
+| `cloud.kubernetes.control.node.install.attempt.wait.duration` | `15` | Seconds between control node install re-attempts |
+| `cloud.kubernetes.control.node.install.reattempt.count` | `100` | Maximum install re-attempts for control nodes |
+| `cloud.kubernetes.worker.node.install.attempt.wait.duration` | `30` | Seconds between worker node install re-attempts |
+| `cloud.kubernetes.worker.node.install.reattempt.count` | `40` | Maximum install re-attempts for worker nodes |
+
+## API reference summary
+
+| Command | Description |
+|---|---|
+| `createKubernetesCluster` | Create and start a new Kubernetes cluster |
+| `startKubernetesCluster` | Start a stopped cluster |
+| `stopKubernetesCluster` | Stop a running cluster |
+| `deleteKubernetesCluster` | Delete a cluster and release all resources |
+| `listKubernetesClusters` | List clusters visible to the caller |
+| `scaleKubernetesCluster` | Scale worker nodes or update node service offerings |
+| `upgradeKubernetesCluster` | Upgrade a cluster to a newer Kubernetes version |
+| `getKubernetesClusterConfig` | Download the kubeconfig for a cluster |
+| `updateKubernetesClusterAffinityGroup` | Update affinity group assignments for cluster nodes |
+| `addKubernetesSupportedVersion` | Register a new Kubernetes version |
+| `listKubernetesSupportedVersions` | List registered Kubernetes versions |
+| `updateKubernetesSupportedVersion` | Enable or disable a Kubernetes version |
+| `deleteKubernetesSupportedVersion` | Remove a registered Kubernetes version |

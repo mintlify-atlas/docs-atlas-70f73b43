@@ -1,0 +1,636 @@
+---
+title: "Storage API"
+description: "CloudStack API reference for storage: volumes, snapshots, and template creation."
+---
+
+## createVolume
+
+Creates a disk volume from a disk offering. The volume must be attached to an instance before it can be used.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createVolume
+```
+
+### Request parameters
+
+<ParamField query="name" type="string">
+  The name of the disk volume.
+</ParamField>
+
+<ParamField query="diskofferingid" type="uuid">
+  The ID of the disk offering. Either `diskofferingid` or `snapshotid` must be provided.
+</ParamField>
+
+<ParamField query="snapshotid" type="uuid">
+  The ID of a snapshot to create the volume from. Either `snapshotid` or `diskofferingid` must be provided.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  The ID of the availability zone in which to create the volume.
+</ParamField>
+
+<ParamField query="size" type="long">
+  Arbitrary volume size in GB. Use with custom disk offerings.
+</ParamField>
+
+<ParamField query="miniops" type="long">
+  Minimum IOPS. Use with custom IOPS disk offerings.
+</ParamField>
+
+<ParamField query="maxiops" type="long">
+  Maximum IOPS. Use with custom IOPS disk offerings.
+</ParamField>
+
+<ParamField query="account" type="string">
+  The account to create the volume for. Must be used with `domainid`.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Domain ID for the volume. If account is not specified, the volume is assigned to the caller's account and domain.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Create the volume for a specific project. Mutually exclusive with `account`.
+</ParamField>
+
+<ParamField query="virtualmachineid" type="uuid">
+  UUID of an instance to attach the volume to after creation. Used together with `snapshotid`.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the created volume.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Name of the volume.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Volume type: `ROOT` or `DATADISK`.
+</ResponseField>
+
+<ResponseField name="size" type="long">
+  Size of the volume in bytes.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  State of the volume: `Allocated`, `Ready`, `Destroy`, `Expunging`, `Expunged`, `UploadOp`, `Migrating`, `Snapshotting`, `RevertSnapshotting`.
+</ResponseField>
+
+<ResponseField name="zoneid" type="string">
+  UUID of the zone.
+</ResponseField>
+
+<ResponseField name="diskofferingid" type="string">
+  UUID of the disk offering.
+</ResponseField>
+
+<ResponseField name="virtualmachineid" type="string">
+  UUID of the instance this volume is attached to, if any.
+</ResponseField>
+
+<ResponseField name="created" type="string">
+  Creation timestamp.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createVolume\
+&name=data-vol-01\
+&diskofferingid=5c1a3d8f-...\
+&zoneid=a2f3de84-...\
+&size=100\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listVolumes
+
+Lists disk volumes.
+
+```
+GET /client/api?command=listVolumes
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific volume UUID.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Filter by volume name (substring match).
+</ParamField>
+
+<ParamField query="type" type="string">
+  Filter by volume type: `ROOT` or `DATADISK`.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  Filter by zone.
+</ParamField>
+
+<ParamField query="virtualmachineid" type="uuid">
+  Filter by attached instance.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Filter by account.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Filter by domain.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Filter by project.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listVolumes\
+&zoneid=a2f3de84-...\
+&type=DATADISK\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## attachVolume
+
+Attaches a disk volume to a virtual machine instance.
+
+**Async:** Yes
+
+```
+GET /client/api?command=attachVolume
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  The UUID of the disk volume to attach.
+</ParamField>
+
+<ParamField query="virtualmachineid" type="uuid" required>
+  The UUID of the instance to attach the volume to.
+</ParamField>
+
+<ParamField query="deviceid" type="long">
+  The device slot ID to map the volume to in the guest OS. If not specified, the next available slot is used. Use `0` to attach as ROOT disk.
+
+  On XenServer, device IDs map to: `0` → `/dev/xvda`, `1` → `/dev/xvdb`, `2` → `/dev/xvdc`, and so on.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the volume.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Name of the volume.
+</ResponseField>
+
+<ResponseField name="virtualmachineid" type="string">
+  UUID of the instance the volume is now attached to.
+</ResponseField>
+
+<ResponseField name="deviceid" type="long">
+  Device slot ID used for this attachment.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  Current volume state.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=attachVolume\
+&id=7f3a1c9e-...\
+&virtualmachineid=b2e4f1a0-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## detachVolume
+
+Detaches a disk volume from its instance.
+
+**Async:** Yes
+
+```
+GET /client/api?command=detachVolume
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  UUID of the volume to detach. Either `id` or `deviceid`+`virtualmachineid` must be specified.
+</ParamField>
+
+<ParamField query="deviceid" type="long">
+  Device slot ID to detach from. Must be combined with `virtualmachineid`.
+</ParamField>
+
+<ParamField query="virtualmachineid" type="uuid">
+  UUID of the instance from which to detach. Must be combined with `deviceid`.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=detachVolume\
+&id=7f3a1c9e-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## resizeVolume
+
+Resizes a volume to a new capacity.
+
+**Async:** Yes
+
+```
+GET /client/api?command=resizeVolume
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  UUID of the volume to resize.
+</ParamField>
+
+<ParamField query="size" type="long">
+  New size in GB. Must be larger than the current size.
+</ParamField>
+
+<ParamField query="diskofferingid" type="uuid">
+  New disk offering ID to switch to.
+</ParamField>
+
+<ParamField query="miniops" type="long">
+  New minimum IOPS.
+</ParamField>
+
+<ParamField query="maxiops" type="long">
+  New maximum IOPS.
+</ParamField>
+
+<ParamField query="shrinkok" type="boolean" default="false">
+  If `true`, allows shrinking the volume. Use with caution — data loss may occur.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=resizeVolume\
+&id=7f3a1c9e-...\
+&size=200\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## migrateVolume
+
+Migrates a volume to a different primary storage pool.
+
+**Async:** Yes
+
+```
+GET /client/api?command=migrateVolume
+```
+
+### Request parameters
+
+<ParamField query="volumeid" type="uuid" required>
+  UUID of the volume to migrate.
+</ParamField>
+
+<ParamField query="storageid" type="uuid" required>
+  UUID of the destination storage pool.
+</ParamField>
+
+<ParamField query="livemigrate" type="boolean" default="false">
+  If `true`, performs a live migration while the volume is attached to a running instance.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=migrateVolume\
+&volumeid=7f3a1c9e-...\
+&storageid=e2b4a6c8-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createSnapshot
+
+Creates an instant snapshot of a volume.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createSnapshot
+```
+
+### Request parameters
+
+<ParamField query="volumeid" type="uuid" required>
+  The UUID of the disk volume to snapshot.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Optional name for the snapshot.
+</ParamField>
+
+<ParamField query="quiescevm" type="boolean" default="false">
+  If `true`, quiesces the virtual machine before taking the snapshot. Recommended for application-consistent snapshots.
+</ParamField>
+
+<ParamField query="asyncbackup" type="boolean" default="false">
+  If `true`, the backup operation is asynchronous.
+</ParamField>
+
+<ParamField query="locationtype" type="string" default="primary">
+  Storage location type for managed storage: `primary` or `secondary`.
+</ParamField>
+
+<ParamField query="policyid" type="uuid">
+  UUID of a snapshot policy. If not specified, uses `MANUAL_POLICY`.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Account to create the snapshot for. Must be used with `domainid`.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Domain ID for the snapshot.
+</ParamField>
+
+<ParamField query="zoneidlist" type="uuid[]">
+  Comma-separated list of zone IDs to make the snapshot available in. The snapshot is always available in the volume's zone. Introduced in 4.19.
+</ParamField>
+
+<ParamField query="tags" type="map">
+  Key/value tag pairs to assign to the snapshot.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the created snapshot.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Name of the snapshot.
+</ResponseField>
+
+<ResponseField name="volumeid" type="string">
+  UUID of the source volume.
+</ResponseField>
+
+<ResponseField name="volumename" type="string">
+  Name of the source volume.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  State of the snapshot: `Creating`, `CreatedOnPrimary`, `BackingUp`, `BackedUp`, `Copying`, `Error`.
+</ResponseField>
+
+<ResponseField name="created" type="string">
+  Creation timestamp.
+</ResponseField>
+
+<ResponseField name="intervaltype" type="string">
+  Snapshot interval type: `MANUAL`, `HOURLY`, `DAILY`, `WEEKLY`, `MONTHLY`.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createSnapshot\
+&volumeid=7f3a1c9e-...\
+&name=db-snapshot-$(date +%Y%m%d)\
+&quiescevm=true\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listSnapshots
+
+Lists snapshots.
+
+```
+GET /client/api?command=listSnapshots
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific snapshot UUID.
+</ParamField>
+
+<ParamField query="volumeid" type="uuid">
+  Filter by source volume.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Filter by snapshot name (substring match).
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  Filter by zone.
+</ParamField>
+
+<ParamField query="intervaltype" type="string">
+  Filter by interval type: `MANUAL`, `HOURLY`, `DAILY`, `WEEKLY`, `MONTHLY`.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Filter by account.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listSnapshots\
+&volumeid=7f3a1c9e-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## deleteSnapshot
+
+Deletes a snapshot.
+
+**Async:** Yes
+
+```
+GET /client/api?command=deleteSnapshot
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  UUID of the snapshot to delete.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=deleteSnapshot\
+&id=9a2b4c6d-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createTemplateFromSnapshot
+
+Creates a template from an existing snapshot.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createTemplate
+```
+
+### Request parameters
+
+<ParamField query="name" type="string" required>
+  Name for the new template.
+</ParamField>
+
+<ParamField query="displaytext" type="string" required>
+  Human-readable description of the template.
+</ParamField>
+
+<ParamField query="ostypeid" type="uuid" required>
+  UUID of the OS type for the template.
+</ParamField>
+
+<ParamField query="snapshotid" type="uuid">
+  UUID of the snapshot to create the template from. Either `snapshotid` or `volumeid` must be provided.
+</ParamField>
+
+<ParamField query="volumeid" type="uuid">
+  UUID of the volume to create the template from.
+</ParamField>
+
+<ParamField query="ispublic" type="boolean" default="false">
+  If `true`, the template is visible to all accounts.
+</ParamField>
+
+<ParamField query="isfeatured" type="boolean" default="false">
+  If `true`, the template is featured on the template listing.
+</ParamField>
+
+<ParamField query="passwordenabled" type="boolean" default="false">
+  If `true`, instances deployed from this template support password reset.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createTemplate\
+&name=golden-image-v2\
+&displaytext=Golden+Image+v2\
+&ostypeid=c3f1b8e2-...\
+&snapshotid=9a2b4c6d-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createVolumeFromSnapshot
+
+Creates a new volume from an existing snapshot using `createVolume` with a `snapshotid`.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createVolume
+```
+
+### Request parameters
+
+<ParamField query="snapshotid" type="uuid" required>
+  UUID of the snapshot to create the volume from.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Name for the new volume.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  Zone in which to create the volume.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Account to own the new volume.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createVolume\
+&snapshotid=9a2b4c6d-...\
+&name=restored-vol-01\
+&zoneid=a2f3de84-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```

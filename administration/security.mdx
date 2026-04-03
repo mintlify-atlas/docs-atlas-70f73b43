@@ -1,0 +1,183 @@
+---
+title: "Security"
+description: "Secure your CloudStack deployment: CA framework, TLS, API access controls, two-factor authentication, and SAML SSO."
+---
+
+CloudStack includes a layered security model covering transport encryption between management server and hypervisor agents, a pluggable Certificate Authority (CA) framework, API key management, two-factor authentication, and SAML 2.0 single sign-on.
+
+## Certificate Authority framework
+
+CloudStack's CA framework (`CAManager`) manages TLS certificates for management server–to–hypervisor-agent communication. The active CA provider is selected globally and issues certificates that agents use to establish mutually-authenticated TLS connections.
+
+### Root CA provider
+
+The built-in `root` CA provider (`RootCAProvider`) is a self-signed certificate authority stored in the CloudStack database. On first startup it generates a 30-year RSA keypair and self-signed X.509 certificate, stores them in the `Hidden`-category configuration keys, then issues a certificate for the management server itself.
+
+**Root CA configuration keys** (all in the `Advanced` category unless noted):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ca.plugin.root.private.key` | — | Root CA private key (`Hidden`, encrypted at rest) |
+| `ca.plugin.root.public.key` | — | Root CA public key (`Hidden`, encrypted at rest) |
+| `ca.plugin.root.ca.certificate` | — | Root CA X.509 certificate (`Hidden`, encrypted at rest) |
+| `ca.plugin.root.issuer.dn` | `CN=ca.cloudstack.apache.org` | Issuer distinguished name in issued certificates |
+| `ca.plugin.root.auth.strictness` | `false` | Require a valid client certificate on every TLS connection |
+| `ca.plugin.root.allow.expired.cert` | `true` | Accept expired client certificates during SSL handshake |
+
+<Note>
+  The CA provider acquires a distributed lock (`RootCAProviderSetup`) at startup to prevent concurrent key generation across multiple management server nodes.
+</Note>
+
+### TLS and mTLS between management server and agents
+
+When `ca.plugin.root.auth.strictness` is `false` (the default), the management server uses `SSLEngine.setWantClientAuth(true)` — it requests a client certificate but does not reject connections that lack one. Setting it to `true` switches to `setNeedClientAuth(true)`, enforcing full mutual TLS (mTLS) and rejecting any agent that cannot present a certificate signed by the root CA.
+
+The management server certificate's Subject Alternative Names include:
+- The server's hostname (`NetUtils.getHostName()`)
+- All IP addresses found on the default network interface
+- Any IP within the CIDR configured in `ManagementNetwork`
+- A custom SAN from `CAManager.CertManagementCustomSubjectAlternativeName`
+
+<Steps>
+  <Step title="View the active CA provider">
+    The CA provider is selected through the `ca.framework.provider.plugin` global setting. The default is `root`.
+  </Step>
+  <Step title="Issue a certificate for a host">
+    Use the `issueCertificate` API call. The root CA provider accepts either a list of domain names and IP addresses, or a PKCS#10 CSR (PEM-encoded).
+  </Step>
+  <Step title="Revoke a certificate">
+    Call `revokeCertificate` with the certificate serial number and CN. The root CA records the revocation in its CRL, and the `RootCACustomTrustManager` checks the CRL on each new TLS handshake.
+  </Step>
+</Steps>
+
+### Custom CA plugins
+
+Additional CA provider plugins can be packaged as separate JARs that implement `CAProvider`. The active provider is chosen via the global configuration so rollback is possible without redeployment.
+
+---
+
+## API key management
+
+Every CloudStack account has an API key and secret key used to sign API requests.
+
+<Tabs>
+  <Tab title="UI">
+    <Steps>
+      <Step title="Navigate to account details">
+        Go to **Accounts**, select an account, and open the **View Users** detail.
+      </Step>
+      <Step title="Generate new keys">
+        Select a user and click **Generate Keys**. The new API key and secret are shown once — copy the secret immediately.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="API">
+    ```bash
+    # Generate new API/secret keypair for a user
+    cloudstack-api registerUserKeys userid=<user-uuid>
+
+    # List API keys for a user (returns only the API key, not the secret)
+    cloudstack-api listUsers userid=<user-uuid>
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  Rotating API keys invalidates all existing signed requests in flight. Schedule key rotation during a low-traffic window and update automation that uses the old keys before rotating.
+</Warning>
+
+### Restricting API access by CIDR
+
+Set the `allow.public.user.api.access` configuration, and use the account-level `api.allowed.source.cidr.list` to restrict which IP ranges are permitted to make API calls on behalf of an account. Requests from outside the allowed CIDRs are rejected with a `SECURITY_ERROR`.
+
+---
+
+## Two-factor authentication
+
+CloudStack ships two 2FA plugins under `plugins/user-two-factor-authenticators/`. A domain administrator enables 2FA for the domain; users then enroll and must supply a code on each login.
+
+<CardGroup cols={2}>
+  <Card title="TOTP" icon="clock">
+    Time-based One-Time Password (`totp` provider). Uses RFC 6238 with a 20-byte Base32-encoded secret. Compatible with Google Authenticator, Authy, and any TOTP app. The shared secret is generated once via `setup2FAKey` using `SecureRandom` and stored on the user account.
+  </Card>
+  <Card title="Static PIN" icon="lock">
+    Fixed-code authenticator (`staticpin` provider). Generates a random 6-digit PIN using `SecureRandom` and stores it on the user account. Simpler than TOTP but does not rotate automatically.
+  </Card>
+</CardGroup>
+
+### Enabling 2FA for a domain
+
+<Steps>
+  <Step title="Enable the provider">
+    Set `user.2fa.enabled` to `true` in Global Settings, and set `user.2fa.provider` to `totp` or `staticpin`.
+  </Step>
+  <Step title="Enforce 2FA">
+    Set `user.2fa.mandatory` to `true` to require all users in the domain to complete 2FA enrollment before they can log in.
+  </Step>
+  <Step title="Users enroll">
+    On next login, users are prompted to scan the QR code (TOTP) or record their static PIN. Enrollment calls `setup2FAKey` internally, which throws `CloudRuntimeException` if a key is already configured for the account.
+  </Step>
+  <Step title="Verify a code">
+    After enrollment, CloudStack calls `check2FA(code, userAccount)` on every login. For TOTP, the expected code is derived from the stored Base32 secret using `TOTP.getOTP(hexKey)`. For static PIN, the stored key is compared directly.
+  </Step>
+</Steps>
+
+<Note>
+  A user can have only one active 2FA key at a time per account. To reset a user's 2FA, an admin must clear their `keyfor2fa` via `updateUser` before `setup2FAKey` can be called again.
+</Note>
+
+---
+
+## SAML 2.0 SSO
+
+CloudStack supports SAML 2.0 as an identity provider integration. Administrators configure the IdP metadata URL and attribute mapping; users authenticate against the IdP and CloudStack accepts the resulting SAML assertion to create an authenticated session.
+
+Key global settings for SAML:
+
+| Setting | Description |
+|---------|-------------|
+| `saml2.enabled` | Enable/disable SAML authentication |
+| `saml2.sp.id` | Service Provider entity ID |
+| `saml2.idp.metadata.url` | URL where CloudStack fetches IdP metadata |
+| `saml2.timeout` | Timeout for IdP metadata fetch |
+| `saml2.user.attribute` | IdP attribute mapped to the CloudStack username |
+
+<Tip>
+  SAML users are linked to existing CloudStack accounts by their username attribute. Create the accounts first, then enable SAML login for each user via `authorizeSamlSso`.
+</Tip>
+
+---
+
+## Account-level security policies
+
+### Role-based access control
+
+Every user is assigned a role that defines which API commands they can call. Roles are managed under **Roles** in the Admin UI. The built-in roles are `Admin`, `ResourceAdmin`, `DomainAdmin`, and `User`.
+
+<Warning>
+  The `EnableDynamicApiChecker` configuration key controls whether role-based API checking is active. This key cannot be modified via the `updateConfiguration` API — the management server enforces this restriction explicitly.
+</Warning>
+
+### Firewall rules and security groups
+
+<AccordionGroup>
+  <Accordion title="Security groups (basic zone / shared network)">
+    Security groups are stateful firewall rule sets applied to individual VMs. Rules specify inbound and outbound traffic by protocol, port range, and source CIDR or another security group. VMs can belong to multiple security groups, and the effective rule set is the union of all groups.
+
+    Manage security groups via:
+    - UI: **Network** > **Security Groups**
+    - API: `createSecurityGroup`, `authorizeSecurityGroupIngress`, `authorizeSecurityGroupEgress`, `revokeSecurityGroupIngress`, `revokeSecurityGroupEgress`
+  </Accordion>
+  <Accordion title="Firewall rules (isolated network with virtual router)">
+    For isolated networks using the virtual router, firewall rules control which external traffic can reach the network's source NAT IP. Rules are specified per protocol, port range, and source CIDR.
+
+    - UI: **Network** > select a network > **View IP Addresses** > select the source NAT IP > **Firewall**
+    - API: `createFirewallRule`, `deleteFirewallRule`, `listFirewallRules`
+  </Accordion>
+  <Accordion title="Network ACLs (VPC)">
+    VPCs use Network ACL lists applied to tiers. Each ACL list contains numbered rules evaluated in order. Rules specify traffic direction (ingress/egress), protocol, port range, CIDR, and whether to allow or deny.
+
+    - UI: **Network** > **VPC** > select a VPC > **Network ACL Lists**
+    - API: `createNetworkACLList`, `createNetworkACL`, `replaceNetworkACLList`
+  </Accordion>
+</AccordionGroup>

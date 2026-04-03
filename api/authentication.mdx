@@ -1,0 +1,186 @@
+---
+title: "API Authentication"
+description: "Authenticate CloudStack API requests using API key and HMAC-SHA1 request signing."
+---
+
+Every CloudStack API request must be signed with an HMAC-SHA1 signature derived from your Secret Key. The management server verifies the signature before executing any command.
+
+## Generating API keys
+
+### From the UI
+
+<Steps>
+  <Step title="Log in to the CloudStack UI">
+    Navigate to `http://<management-server>:8080/client` and sign in with your credentials.
+  </Step>
+  <Step title="Open account settings">
+    Click your username in the top-right corner and select **My Account**.
+  </Step>
+  <Step title="Generate keys">
+    Click the **API keys** tab and then **Generate Keys**. Save both values — the **Secret Key** is only shown once and cannot be retrieved again.
+  </Step>
+</Steps>
+
+### Via the API (`registerUserKeys`)
+
+An admin can generate API keys for any user by calling `registerUserKeys` with the target user's UUID:
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=registerUserKeys\
+&id=<user-uuid>\
+&apiKey=<admin-api-key>\
+&signature=<admin-signature>"
+```
+
+The response includes the new `apikey` and `secretkey` for that user.
+
+## Signing algorithm
+
+The signature is an HMAC-SHA1 digest of the canonicalized query string, base64-encoded.
+
+### Step-by-step
+
+Given a request with parameters:
+
+```
+command=listVirtualMachines
+apiKey=mnH5tL8nFd...
+response=json
+```
+
+**1. Lowercase all parameter names and values.**
+
+```
+command=listvirtualmachines
+apikey=mnh5tl8nfd...
+response=json
+```
+
+**2. Sort parameters alphabetically by key (case-insensitive).**
+
+```
+apikey=mnh5tl8nfd...
+command=listvirtualmachines
+response=json
+```
+
+**3. URL-encode each value using `%XX` encoding (spaces as `%20`, not `+`).**
+
+```
+apikey=mnh5tl8nfd...
+command=listvirtualmachines
+response=json
+```
+
+**4. Join key=value pairs with `&`.**
+
+```
+apikey=mnh5tl8nfd...&command=listvirtualmachines&response=json
+```
+
+**5. Compute HMAC-SHA1 of that string using your Secret Key.**
+
+**6. Base64-encode the raw HMAC digest.**
+
+**7. URL-encode the resulting base64 string and append as `signature=...`.**
+
+## Python signing example
+
+```python
+import urllib.parse
+import urllib.request
+import hmac
+import hashlib
+import base64
+
+def sign_request(params, secret_key):
+    # Sort parameters by key (case-insensitive)
+    sorted_params = sorted(params.items(), key=lambda x: x[0].lower())
+    query_string = "&".join(
+        f"{k.lower()}={urllib.parse.quote_plus(str(v)).replace('+', '%20')}"
+        for k, v in sorted_params
+    )
+    sig = hmac.new(secret_key.encode(), query_string.encode(), hashlib.sha1)
+    return base64.b64encode(sig.digest()).decode()
+
+
+def make_api_request(base_url, command, api_key, secret_key, extra_params=None):
+    params = {
+        "command": command,
+        "apiKey": api_key,
+        "response": "json",
+    }
+    if extra_params:
+        params.update(extra_params)
+
+    signature = sign_request(params, secret_key)
+    params["signature"] = signature
+
+    query = urllib.parse.urlencode(params)
+    url = f"{base_url}?{query}"
+
+    with urllib.request.urlopen(url) as resp:
+        return resp.read()
+
+
+# Example usage
+result = make_api_request(
+    base_url="http://192.0.2.10:8080/client/api",
+    command="listVirtualMachines",
+    api_key="mnH5tL8nFd...",
+    secret_key="xS3k9mPq2...",
+)
+print(result)
+```
+
+<Note>
+  Always pass `digestmod` explicitly when calling `hmac.new(key, msg, digestmod)`. In Python 3, omitting `digestmod` raises a `TypeError`.
+</Note>
+
+## Curl example with a signed request
+
+```bash
+#!/bin/bash
+
+BASE_URL="http://192.0.2.10:8080/client/api"
+API_KEY="mnH5tL8nFd..."
+SECRET_KEY="xS3k9mPq2..."
+COMMAND="listVirtualMachines"
+
+# Build canonical string (manually for illustration)
+CANONICAL="apikey=${API_KEY,,}&command=${COMMAND,,}&response=json"
+
+# Compute signature
+SIG=$(echo -n "$CANONICAL" | openssl dgst -sha1 -hmac "$SECRET_KEY" -binary | base64)
+SIG_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote_plus('$SIG').replace('+','%20'))")
+
+curl -s "${BASE_URL}?command=${COMMAND}&apiKey=${API_KEY}&response=json&signature=${SIG_ENC}"
+```
+
+<Note>
+  In practice, use the Python signing helper above (or a CloudStack SDK) rather than shell string manipulation, which is error-prone with special characters in keys.
+</Note>
+
+## Common errors
+
+| Error code | Cause                                                              | Resolution                                                        |
+| ---------- | ------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `431`      | Invalid signature — the computed signature does not match          | Check parameter ordering, lowercasing, and URL-encoding logic     |
+| `401`      | Unauthorized — API key not found or account disabled               | Verify the API key is valid and the account is active             |
+| `530`      | Account not allowed to make this API call                          | Ensure the account has the required role or permissions           |
+
+### Debugging signature errors
+
+- Confirm you are lowercasing **both** parameter names and values before sorting.
+- Confirm you are using `%20` for spaces, not `+`.
+- Confirm the HMAC input is the full joined query string, not the final URL.
+- Confirm you are base64-encoding the **raw bytes** of the HMAC digest, not a hex string.
+
+## API key best practices
+
+- **One key per service**: Create a dedicated account (or user) for each application or script that calls the API. Avoid sharing keys across services.
+- **Rotate keys regularly**: Use `registerUserKeys` to issue a new key pair. Revoke old keys by deleting the associated user or regenerating keys in the UI.
+- **Restrict account permissions**: Assign the minimum required role to the account owning the API key. CloudStack supports fine-grained roles — use them.
+- **Store secrets securely**: Never commit Secret Keys to source control. Use environment variables or a secrets manager.
+- **Monitor API usage**: CloudStack logs API calls with account and source IP. Review logs for unexpected activity.

@@ -1,0 +1,178 @@
+---
+title: "Hypervisor Support"
+description: "CloudStack supports KVM, VMware vSphere, XenServer, XCP-ng, and Hyper-V from a single management plane."
+---
+
+Apache CloudStack manages workloads across multiple hypervisor technologies from a single control plane. The same CloudStack API and UI operate regardless of the hypervisor used in a cluster. Hypervisor support is implemented through a plugin architecture in `plugins/hypervisors/`; each plugin provides a `ServerResource` that translates CloudStack's `Command`/`Answer` protocol into hypervisor-specific operations.
+
+## How CloudStack communicates with hypervisors
+
+CloudStack uses two communication models depending on the hypervisor:
+
+<CardGroup cols={2}>
+  <Card title="CloudStack Agent" icon="server">
+    KVM, XenServer/XCP-ng, and Hyper-V hosts run the **CloudStack Agent** (`com.cloud.agent.Agent`). The agent opens an outbound TLS connection to the management server on port 8250, registers the host capabilities via `StartupCommand`, and then executes `Command` objects dispatched by the management server.
+  </Card>
+  <Card title="vCenter API (VMware)" icon="cloud">
+    VMware ESXi hosts are not contacted directly. Instead, the management server connects to **vCenter Server** through the VMware API (`VmwareResource`). CloudStack registers a vCenter datacenter via `AddVmwareDcCmd` and maps CloudStack clusters to vCenter clusters.
+  </Card>
+</CardGroup>
+
+Agent load balancing is handled by `framework/agent-lb`. Each agent receives an `SetupMSListCommand` containing all active management server nodes; if the primary node becomes unreachable, the agent reconnects to another.
+
+## Supported hypervisors
+
+<Tabs>
+  <Tab title="KVM">
+    KVM (Kernel-based Virtual Machine) is the recommended hypervisor for new CloudStack deployments. It uses Linux's native KVM module combined with QEMU for device emulation and libvirt as the management API.
+
+    **Plugin location:** `plugins/hypervisors/kvm/`
+
+    **Key classes:**
+    - `LibvirtComputingResource` — the main `ServerResource` that handles all VM lifecycle commands via libvirt
+    - `LibvirtStorageAdaptor` — manages storage pools (NFS, RBD, iSCSI, Fibre Channel, local)
+    - `KVMStoragePoolManager` — pool lifecycle and disk operations
+    - `LibvirtStorageProcessor` — storage command dispatch
+    - `KVMHAProvider` / `KVMHostActivityChecker` — high-availability fencing
+
+    **Communication:** CloudStack Agent running on the KVM host connects to the management server. Each command wrapper in `com.cloud.hypervisor.kvm.resource.wrapper` handles one command type (e.g. `LibvirtStartCommandWrapper`, `LibvirtStopCommandWrapper`, `LibvirtMigrateCommandWrapper`).
+
+    **Storage:** KVM supports all primary storage backends: NFS, Ceph/RBD, iSCSI (`IscsiAdmStorageAdaptor`), Fibre Channel (`FiberChannelAdapter`), and local disk. ScaleIO/PowerFlex is supported via `ScaleIOStorageAdaptor`.
+
+    **Networking:** KVM uses Linux bridges or Open vSwitch (OVS). OVS tunnel support (GRE, VXLAN) is implemented in `LibvirtOvsCreateTunnelCommandWrapper` and related wrappers. DPDK support is available via `DpdkDriverImpl`.
+
+    **Live migration:** Supported between hosts in the same cluster using `libvirt` live migration. Cross-cluster migration requires shared storage and is handled by `LibvirtMigrateCommandWrapper`.
+
+    <Tip>
+      KVM is recommended because it receives the most active development in the CloudStack community, supports the widest set of storage backends, and does not require a separate hypervisor license.
+    </Tip>
+  </Tab>
+  <Tab title="VMware vSphere">
+    CloudStack integrates with VMware vSphere through vCenter Server. ESXi hosts are managed via the vSphere API; no CloudStack agent is installed on the ESXi hosts themselves.
+
+    **Plugin location:** `plugins/hypervisors/vmware/`
+
+    **Key classes:**
+    - `VmwareResource` — the `ServerResource` for VMware; communicates exclusively through vCenter API
+    - `VmwareManagerImpl` — lifecycle management for VMware datacenter registrations
+    - `VmwareStorageManagerImpl` — volume, template, and snapshot operations on datastores
+    - `VMwareGuru` — hypervisor guru that translates CloudStack VM profiles to VMware VM specs
+    - `VmwareServerDiscoverer` — host discovery via vCenter
+
+    **Setup:** An administrator adds a vCenter datacenter to a CloudStack zone with `AddVmwareDcCmd`. CloudStack maps each vCenter cluster to a CloudStack cluster. ESXi hosts within those clusters are discovered automatically.
+
+    **Storage:** VMware clusters use VMFS, NFS, or vSAN datastores. Storage policies are supported via `ListVsphereStoragePoliciesCmd` and `ImportVsphereStoragePoliciesCmd`. Storage vMotion is used for volume migration.
+
+    **Networking:** VMware vSphere Standard Switches (vSS), vSphere Distributed Switches (vDS), and Cisco Nexus 1000V virtual switches are supported. Cisco Nexus VSM integration is in `CiscoNexusVSMElement`. NSX-T integration is available via `plugins/network-elements/nsx`.
+
+    **HA and vMotion:** vSphere HA and vMotion are leveraged for VM recovery and live migration. CloudStack's HA layer (`VmwareInvestigator`, `VmwareFencer`) integrates with vSphere HA events.
+
+    <Note>
+      VMware vSphere requires a valid vSphere license. CloudStack does not manage vSphere licensing.
+    </Note>
+  </Tab>
+  <Tab title="XenServer / XCP-ng">
+    XenServer (Citrix Hypervisor) and XCP-ng (its open-source fork) are Xen-based hypervisors managed through the XAPI toolstack.
+
+    **Plugin location:** `plugins/hypervisors/xenserver/`
+
+    **Key classes:**
+    - `XenServerResourceNewBase` / `Xenserver84Resource` / `XenServer650Resource` — versioned `ServerResource` implementations for different XenServer/XCP-ng releases
+    - `XenServerStorageProcessor` — storage operations via XAPI's SR/VDI model
+    - `XenServerConnectionPool` — manages persistent XAPI connections
+    - `XenServerStorageMotionStrategy` — storage migration using XAPI's `migrate_send`
+    - `XcpServerNetworkUsageCommandWrapper` — network statistics for XCP-ng hosts
+
+    **Communication:** The CloudStack Agent runs on each XenServer/XCP-ng host. Command wrappers in `com.cloud.hypervisor.xenserver.resource.wrapper.xenbase` implement all VM and storage operations using the `com.xensource.xenapi` Java bindings (`ConnectionNew`).
+
+    **Storage:** XenServer uses Storage Repositories (SRs). NFS, iSCSI, Fibre Channel, and local-disk SRs are supported. The VDI (Virtual Disk Image) model maps directly to CloudStack volumes.
+
+    **Networking:** XenServer networking uses `xe network` objects backed by Linux bridges or Open vSwitch. OVS tunnel support (GRE) is implemented in `CitrixOvsCreateTunnelCommandWrapper`.
+
+    **Snapshots and migration:** VM snapshots use XAPI's `VM.snapshot`; cross-pool storage migration uses `migrate_send` / `migrate_receive` (XenServer 6.1+), implemented in `XenServer610MigrateWithStorageCommandWrapper`.
+
+    **GPU support:** GPU pass-through statistics are available via `XenServer620SP1GetGPUStatsCommandWrapper`.
+  </Tab>
+  <Tab title="Hyper-V">
+    Microsoft Hyper-V (Windows Server) is supported via a .NET-based CloudStack Agent that runs as a Windows service.
+
+    **Plugin location:** `plugins/hypervisors/hyperv/`
+
+    **Key classes:**
+    - `HypervDirectConnectResource` — the `ServerResource` implementation; communicates with the .NET agent over HTTP
+    - `HypervManagerImpl` / `HypervManager` — management server-side lifecycle manager
+    - `HypervGuru` — hypervisor guru for Hyper-V VM profiles
+    - `HypervServerDiscoverer` — host discovery via direct connection
+    - `HypervInvestigator` — high-availability host investigation
+    - `HypervStorageMotionStrategy` — storage motion support
+
+    **Agent architecture:** Unlike KVM and XenServer, the Hyper-V plugin uses a **direct-connect** model. The .NET agent (`DotNet/ServerResource/`) runs on the Windows Server host, exposes an HTTP endpoint, and the management server's `HypervDirectConnectResource` connects to it.
+
+    **Storage:** Hyper-V uses SMB 3.0 shares and local disk. VHD and VHDX disk formats are supported.
+
+    **Networking:** Hyper-V Virtual Switch is used for VM networking. VLAN tagging is supported.
+
+    <Warning>
+      Hyper-V support in CloudStack requires a Windows Server license on each hypervisor host. Feature parity with KVM is limited; some advanced features (e.g. certain storage migrations) may not be available.
+    </Warning>
+  </Tab>
+  <Tab title="OVM / LXC">
+    CloudStack includes basic support for Oracle VM (OVM) and Linux Containers (LXC).
+
+    **Plugin locations:**
+    - `plugins/hypervisors/ovm` — Oracle VM 2.x
+    - `plugins/hypervisors/ovm3` — Oracle VM 3.x (OVMAPI-based)
+
+    LXC support allows deploying lightweight Linux containers as CloudStack VMs on KVM hosts. The LXC driver is integrated into the KVM plugin via libvirt's LXC driver.
+
+    <Note>
+      OVM and LXC are not recommended for production use. They receive minimal maintenance and lack parity with KVM and VMware for features such as live migration, snapshots, and advanced networking.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Feature matrix
+
+The table below shows which features are available across the four primary hypervisors. "Full" means supported and actively maintained; "Partial" means available with limitations; "No" means not supported.
+
+| Feature | KVM | VMware vSphere | XenServer / XCP-ng | Hyper-V |
+|---------|-----|---------------|--------------------|---------|
+| Live migration (same cluster) | Full | Full (vMotion) | Full | Partial |
+| Cross-cluster migration | Full | Full (xvMotion) | Full | No |
+| Volume live migration | Full | Full (Storage vMotion) | Full | Partial |
+| VM snapshots | Full | Full | Full | Partial |
+| Volume snapshots | Full | Full | Full | Partial |
+| GPU pass-through | Full | Full | Partial | No |
+| OVS / SDN networking | Full | Full (NSX) | Partial | No |
+| Security groups | Full | No | Full | No |
+| VPC | Full | Full | Full | Partial |
+| Ceph / RBD primary storage | Full | No | No | No |
+| iSCSI primary storage | Full | Full | Full | No |
+| NFS primary storage | Full | Full | Full | Full |
+| Local storage | Full | Full | Full | Full |
+| Console proxy access | Full | Full | Full | Full |
+| Dynamic CPU / RAM scaling | Full | Full | Partial | Partial |
+| HA with fencing | Full | Full | Full | Partial |
+| IPv6 | Full | Partial | Partial | No |
+| UEFI boot | Full | Full | Partial | Partial |
+
+## Hypervisor version matrix
+
+CloudStack's `plugins/hypervisors/xenserver` contains versioned resource classes that map to specific XenServer and XCP-ng releases:
+
+| Class | XenServer / XCP-ng version |
+|-------|---------------------------|
+| `XenServerResourceNewBase` | Base class; XenServer 6.0+ |
+| `XenServer650Resource` | XenServer 6.5.0 |
+| `Xenserver625Resource` | XenServer 6.2.5 |
+| `Xenserver84Resource` | XenServer 8.4+ / XCP-ng 8.x |
+
+For VMware, CloudStack supports vSphere 6.7 and later through vCenter Server integration. The `VmwareDatacenterZoneMapVO` class maps vCenter Datacenter objects to CloudStack zones.
+
+## Baremetal provisioning
+
+CloudStack also supports baremetal hosts through `plugins/hypervisors/baremetal/`. Baremetal targets are provisioned via PXE boot managed by `NwDevicePxeServerResponse` and `NwDeviceDhcpResponse`. Bare-metal hosts do not run a hypervisor; CloudStack deploys OS images directly to physical hardware.
+
+## UCS integration
+
+The `plugins/hypervisors/ucs/` plugin integrates with Cisco UCS Manager to automate service-profile association for blade servers before CloudStack adds them as hypervisor hosts.

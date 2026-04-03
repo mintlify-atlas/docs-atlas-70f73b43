@@ -1,0 +1,288 @@
+---
+title: "Zones, Pods, and Clusters"
+description: "Set up and manage the CloudStack infrastructure hierarchy: zones, pods, clusters, and hypervisor hosts."
+---
+
+CloudStack organizes physical infrastructure into a three-level hierarchy: zones contain pods, pods contain clusters, and clusters contain hypervisor hosts. Understanding this hierarchy is essential before adding any compute capacity.
+
+<CardGroup cols={3}>
+  <Card title="Zone" icon="globe">
+    A logical data center boundary. Maps to a single physical data center or availability zone.
+  </Card>
+  <Card title="Pod" icon="network-wired">
+    A Layer 2 network boundary within a zone. Typically maps to a single rack or row of racks.
+  </Card>
+  <Card title="Cluster" icon="server">
+    A group of hosts running the same hypervisor type and sharing primary storage.
+  </Card>
+</CardGroup>
+
+## Zone types
+
+CloudStack supports two zone network types, chosen at zone creation time and not changeable afterward.
+
+<Tabs>
+  <Tab title="Basic zone">
+    Guest VMs receive IP addresses directly from the pod network. Security groups enforce isolation between tenants. Best suited for simple deployments where all tenants share a flat network.
+
+    - No virtual routers for guest networks
+    - Security groups provide per-VM firewall rules
+    - Single flat network per pod
+    - Lower overhead, simpler architecture
+  </Tab>
+  <Tab title="Advanced zone">
+    Full multi-tenant networking with isolated networks, VPCs, virtual routers, and public IP management. Required for production multi-tenant deployments.
+
+    - Each account gets isolated guest networks
+    - Virtual Router VMs handle NAT, DHCP, and firewall
+    - VPC support with private gateways and ACLs
+    - Public IP pools with static NAT and load balancing
+  </Tab>
+</Tabs>
+
+## Creating a zone
+
+<Steps>
+  <Step title="Name and network type">
+    Provide the zone name and select the network type (`Basic` or `Advanced`). The network type cannot be changed after creation.
+
+    ```bash
+    # API: createZone
+    name=us-east-1
+    networktype=Advanced
+    ```
+  </Step>
+  <Step title="Configure DNS settings">
+    Supply at least one external DNS server (`dns1`) and one internal DNS server (`internaldns1`). The internal DNS resolves hostnames within the management network. For IPv6 deployments, also supply `ip6dns1`.
+
+    | Parameter | Required | Description |
+    |---|---|---|
+    | `dns1` | Yes | Primary external DNS for guest VMs |
+    | `dns2` | No | Secondary external DNS for guest VMs |
+    | `internaldns1` | Yes | Primary DNS for the management network |
+    | `internaldns2` | No | Secondary DNS for the management network |
+    | `ip6dns1` | No | Primary IPv6 DNS |
+    | `ip6dns2` | No | Secondary IPv6 DNS |
+  </Step>
+  <Step title="Optional zone settings">
+    Configure additional parameters before enabling the zone:
+
+    - **`guestcidraddress`** — The CIDR block reserved for guest VM networks (e.g., `10.1.0.0/16`). Required for Advanced zones.
+    - **`localstorageenabled`** — Set to `true` to allow service offerings that use host-local storage.
+    - **`securitygroupenabled`** — Enables security groups for Basic zone deployments.
+    - **`domain`** — Network domain name appended to hostnames in this zone (e.g., `us-east.example.com`).
+    - **`domainid`** — Restrict the zone to a specific domain. Leave null for a public zone available to all accounts.
+    - **`isedge`** — Mark as an edge zone (since 4.18.0) for lightweight deployments without a management server in the zone.
+
+    ```bash
+    # Example: Advanced zone with guest CIDR
+    guestcidraddress=10.1.0.0/16
+    localstorageenabled=false
+    domain=us-east.example.com
+    ```
+  </Step>
+  <Step title="Set allocation state">
+    Set `allocationstate` to `Enabled` to allow resource allocation, or `Disabled` to complete configuration before making the zone available.
+
+    ```bash
+    allocationstate=Disabled
+    ```
+  </Step>
+  <Step title="Add physical networks">
+    In the UI wizard, define physical networks and assign traffic types (Management, Guest, Public, Storage) to network labels matching your physical switch configuration.
+  </Step>
+  <Step title="Add a pod">
+    Every zone requires at least one pod before you can add clusters and hosts.
+  </Step>
+</Steps>
+
+<Note>
+  The `createZone` API command is available only to root administrators (`Account.ACCOUNT_ID_SYSTEM`). Domain admins and users cannot create zones.
+</Note>
+
+## Pod configuration
+
+A pod represents a Layer 2 network boundary—typically one rack or a set of racks connected to the same top-of-rack switch. Hosts within the same pod share a contiguous IP range on the management network.
+
+### Creating a pod
+
+Use the `createPod` API command. The pod's IP range is allocated to hypervisor management interfaces (not guest VM IPs).
+
+| Parameter | Required | Description |
+|---|---|---|
+| `name` | Yes | Human-readable pod name |
+| `zoneid` | Yes | The zone this pod belongs to |
+| `startip` | No | First IP address in the management IP range |
+| `endip` | No | Last IP address in the management IP range |
+| `gateway` | No | Default gateway for the management network |
+| `netmask` | No | Subnet mask for the management network |
+| `allocationstate` | No | `Enabled` or `Disabled` |
+| `storageaccessgroups` | No | Storage access groups for hosts in this pod (since 4.21.0) |
+
+```bash
+# API: createPod
+name=pod-rack-01
+zoneid=<zone-uuid>
+startip=192.168.1.10
+endip=192.168.1.50
+gateway=192.168.1.1
+netmask=255.255.255.0
+```
+
+<Warning>
+  The IP range you assign to a pod must not overlap with IP ranges assigned to other pods in the same zone, or with the public IP range used for guest network egress.
+</Warning>
+
+### Managing pods
+
+| Operation | API command |
+|---|---|
+| Update pod settings | `updatePod` |
+| Remove an empty pod | `deletePod` |
+| List pods | `listPods` |
+
+## Cluster setup
+
+A cluster groups hosts that share the same hypervisor type and can share the same primary storage pool. CloudStack currently supports these hypervisors in a cluster: `XenServer`, `KVM`, `VMware`, `Hyperv`, `BareMetal`, `Simulator`, `Ovm3`, `External`.
+
+### Cluster types
+
+| Type | Description |
+|---|---|
+| `CloudManaged` | CloudStack manages host discovery and lifecycle |
+| `ExternalManaged` | An external system (e.g., vCenter for VMware) manages the cluster |
+
+### Adding a cluster
+
+```bash
+# API: addCluster
+clustername=kvm-cluster-01
+podid=<pod-uuid>
+zoneid=<zone-uuid>
+hypervisor=KVM
+clustertype=CloudManaged
+allocationstate=Enabled
+```
+
+For VMware clusters, you can specify virtual switch types for guest and public traffic:
+
+```bash
+# VMware vSphere with distributed vSwitch
+vswitchtypeguesttraffic=vmwaredvs
+vswitchnameguesttraffic=dvSwitch-Guest
+vswitchtypepublictraffic=vmwaredvs
+vswitchnamepublictraffic=dvSwitch-Public
+```
+
+<Tip>
+  Since CloudStack 4.20, you can specify the CPU architecture for a cluster using the `arch` parameter. Valid values are `x86_64`, `aarch64`, and `s390x`. This allows mixed-architecture environments to correctly schedule VMs on compatible hosts.
+</Tip>
+
+### Cluster DRS (Dynamic Resource Scheduling)
+
+CloudStack supports DRS plan generation and execution for clusters:
+
+| API command | Description |
+|---|---|
+| `generateClusterDrsPlan` | Generate a DRS rebalancing plan |
+| `listClusterDrsPlan` | List DRS plans for a cluster |
+| `executeClusterDrsPlan` | Execute a generated DRS plan |
+
+## Adding hosts to clusters
+
+Use the `addHost` API command to register a hypervisor host with CloudStack.
+
+```bash
+# API: addHost — KVM host
+zoneid=<zone-uuid>
+podid=<pod-uuid>
+clusterid=<cluster-uuid>
+hypervisor=KVM
+url=http://192.168.1.20
+username=root
+password=<host-password>
+hosttags=gpu,ssd
+```
+
+<Note>
+  For KVM hosts, you can include the SSH port in the URL: `http://host:22`. If omitted, CloudStack uses the value from the `kvm.host.discovery.ssh.port` global configuration.
+</Note>
+
+### Host tags
+
+Tags applied to a host (via `hosttags`) are matched against service offering tags to control VM placement. A VM using a service offering tagged `gpu` will only deploy on hosts also tagged `gpu`.
+
+### Storage access groups
+
+Since CloudStack 4.21.0, storage access groups allow fine-grained control of which hosts can access which storage pools. Set `storageaccessgroups` on both the host and the storage pool to restrict connectivity.
+
+## Host state management
+
+### Host allocation states
+
+| State | Description |
+|---|---|
+| `Enabled` | Host accepts new VM deployments |
+| `Disabled` | Host stops receiving new VMs but existing VMs continue running |
+| `Maintenance` | CloudStack migrates all VMs off the host before taking it offline |
+
+### Maintenance mode
+
+Before performing host maintenance (hardware upgrades, kernel updates, hypervisor patches), put the host into maintenance mode:
+
+<Steps>
+  <Step title="Initiate maintenance">
+    Call `prepareForHostMaintenance` with the host ID. CloudStack live-migrates all running VMs to other hosts in the cluster.
+
+    ```bash
+    # API: prepareForHostMaintenance
+    id=<host-uuid>
+    ```
+  </Step>
+  <Step title="Wait for migration">
+    Monitor host state until it transitions to `Maintenance`. This may take several minutes depending on the number and size of running VMs.
+  </Step>
+  <Step title="Perform maintenance">
+    With all VMs migrated off, perform any required host-level maintenance.
+  </Step>
+  <Step title="Return to service">
+    Call `cancelHostMaintenance` to re-enable the host and allow new VM deployments.
+
+    ```bash
+    # API: cancelHostMaintenance
+    id=<host-uuid>
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  If no other hosts in the cluster have sufficient capacity to accept the migrating VMs, `prepareForHostMaintenance` will fail. Ensure adequate cluster capacity before initiating maintenance.
+</Warning>
+
+### Host degraded state
+
+If a host exhibits anomalous behavior without going offline, root admins can declare it degraded:
+
+```bash
+# API: declareHostAsDegraded
+id=<host-uuid>
+```
+
+CloudStack will not schedule new VMs on a degraded host. Use `cancelHostAsDegraded` to restore normal scheduling.
+
+## Pod and cluster IP allocation
+
+<AccordionGroup>
+  <Accordion title="Management IP range">
+    The IP range defined on a pod is used for hypervisor host management interfaces. CloudStack automatically assigns IPs from this range to new hosts added to pods within the zone. The range must be reachable from the CloudStack management server.
+  </Accordion>
+  <Accordion title="Guest IP ranges (Advanced zones)">
+    Guest network IP ranges are managed per network, not per pod. When creating an isolated network or shared network, you specify the gateway, netmask, and optionally start/end IP addresses for that network's DHCP pool.
+  </Accordion>
+  <Accordion title="Public IP pools">
+    Public IP addresses used for static NAT, port forwarding, and load balancing are allocated from VLAN-backed IP ranges added to the zone. These are configured under Infrastructure > Zones > Public IP Ranges in the UI.
+  </Accordion>
+  <Accordion title="Storage access groups (since 4.21.0)">
+    Storage access groups can be set at the zone, pod, cluster, and host level to define which hosts are allowed to connect to which storage pools. Groups are comma-separated strings and are matched between hosts and storage pools at provisioning time.
+  </Accordion>
+</AccordionGroup>

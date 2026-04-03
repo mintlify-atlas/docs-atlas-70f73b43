@@ -1,0 +1,767 @@
+---
+title: "Accounts and Domains API"
+description: "CloudStack API reference for user management: accounts, users, domains, projects, and resource limits."
+---
+
+## createAccount
+
+Creates a new account. Also creates the first user for the account.
+
+<Note>
+  This command requires admin or domain admin privileges.
+</Note>
+
+```
+GET /client/api?command=createAccount
+```
+
+### Request parameters
+
+<ParamField query="username" type="string" required>
+  Unique username for the new user.
+</ParamField>
+
+<ParamField query="password" type="string" required>
+  Clear text password. Hashed using SHA256SALT by default. Custom authentication adapters may use different hashing.
+</ParamField>
+
+<ParamField query="firstname" type="string" required>
+  First name of the user.
+</ParamField>
+
+<ParamField query="lastname" type="string" required>
+  Last name of the user.
+</ParamField>
+
+<ParamField query="email" type="string" required>
+  Email address for the user.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Name for the new account. If not specified, the `username` is used as the account name.
+</ParamField>
+
+<ParamField query="accounttype" type="integer">
+  Type of account: `0` for user, `1` for root admin, `2` for domain admin.
+</ParamField>
+
+<ParamField query="roleid" type="uuid">
+  Creates the account under the specified role. Use with `accounttype` or as an alternative.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Creates the account under the specified domain.
+</ParamField>
+
+<ParamField query="timezone" type="string">
+  Timezone for the account. See CloudStack Time Zone Format.
+</ParamField>
+
+<ParamField query="networkdomain" type="string">
+  Network domain for the account's networks.
+</ParamField>
+
+<ParamField query="accountdetails" type="map">
+  Key/value pairs for account-specific custom parameters.
+</ParamField>
+
+<ParamField query="accountid" type="string">
+  Account UUID for accounts imported from an external provisioning system.
+</ParamField>
+
+<ParamField query="userid" type="string">
+  User UUID for users imported from an external provisioning system.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the created account.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Account name.
+</ResponseField>
+
+<ResponseField name="accounttype" type="integer">
+  Account type: `0` (user), `1` (root admin), `2` (domain admin).
+</ResponseField>
+
+<ResponseField name="domainid" type="string">
+  UUID of the domain.
+</ResponseField>
+
+<ResponseField name="domain" type="string">
+  Name of the domain.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  Account state: `enabled` or `disabled`.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  <Expandable title="user fields">
+    <ResponseField name="id" type="string">
+      UUID of the user.
+    </ResponseField>
+    <ResponseField name="username" type="string">
+      Username.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      User email address.
+    </ResponseField>
+    <ResponseField name="firstname" type="string">
+      User first name.
+    </ResponseField>
+    <ResponseField name="lastname" type="string">
+      User last name.
+    </ResponseField>
+    <ResponseField name="apikey" type="string">
+      API key for the user.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createAccount\
+&username=alice\
+&password=changeme\
+&firstname=Alice\
+&lastname=Smith\
+&email=alice%40example.com\
+&account=engineering\
+&accounttype=0\
+&domainid=1234abcd-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listAccounts
+
+Lists accounts.
+
+```
+GET /client/api?command=listAccounts
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific account UUID.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Filter by account name.
+</ParamField>
+
+<ParamField query="accounttype" type="integer">
+  Filter by account type: `0` (user), `1` (root admin), `2` (domain admin).
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Filter by domain.
+</ParamField>
+
+<ParamField query="state" type="string">
+  Filter by state: `enabled` or `disabled`.
+</ParamField>
+
+<ParamField query="iscleanupinprogress" type="boolean">
+  If `true`, return only accounts with cleanup in progress.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listAccounts\
+&domainid=1234abcd-...\
+&accounttype=0\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createUser
+
+Creates a user within an existing account.
+
+<Note>
+  This command requires admin or domain admin privileges.
+</Note>
+
+```
+GET /client/api?command=createUser
+```
+
+### Request parameters
+
+<ParamField query="account" type="string" required>
+  The account in which to create the user.
+</ParamField>
+
+<ParamField query="username" type="string" required>
+  Unique username.
+</ParamField>
+
+<ParamField query="password" type="string" required>
+  Clear text password. Hashed using SHA256SALT by default.
+</ParamField>
+
+<ParamField query="firstname" type="string" required>
+  First name.
+</ParamField>
+
+<ParamField query="lastname" type="string" required>
+  Last name.
+</ParamField>
+
+<ParamField query="email" type="string" required>
+  Email address.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Creates the user under the specified domain. Must be used with `account`.
+</ParamField>
+
+<ParamField query="timezone" type="string">
+  User's timezone. See CloudStack Time Zone Format.
+</ParamField>
+
+<ParamField query="userid" type="string">
+  User UUID for users imported from external provisioning systems.
+</ParamField>
+
+<ParamField query="passwordchangerequired" type="boolean">
+  If `true`, the user must change their password on next login. Introduced in 4.23.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the created user.
+</ResponseField>
+
+<ResponseField name="username" type="string">
+  Username.
+</ResponseField>
+
+<ResponseField name="account" type="string">
+  Account name.
+</ResponseField>
+
+<ResponseField name="accountid" type="string">
+  UUID of the account.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Email address.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  User state: `enabled` or `disabled`.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createUser\
+&account=engineering\
+&username=bob\
+&password=changeme\
+&firstname=Bob\
+&lastname=Jones\
+&email=bob%40example.com\
+&domainid=1234abcd-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listUsers
+
+Lists users.
+
+```
+GET /client/api?command=listUsers
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific user UUID.
+</ParamField>
+
+<ParamField query="username" type="string">
+  Filter by username (exact match).
+</ParamField>
+
+<ParamField query="account" type="string">
+  Filter by account name.
+</ParamField>
+
+<ParamField query="accountid" type="uuid">
+  Filter by account UUID.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Filter by domain.
+</ParamField>
+
+<ParamField query="state" type="string">
+  Filter by state: `enabled` or `disabled`.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listUsers\
+&account=engineering\
+&domainid=1234abcd-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createDomain
+
+Creates a new domain.
+
+```
+GET /client/api?command=createDomain
+```
+
+### Request parameters
+
+<ParamField query="name" type="string" required>
+  The name of the domain.
+</ParamField>
+
+<ParamField query="parentdomainid" type="uuid">
+  UUID of the parent domain. Defaults to the root domain.
+</ParamField>
+
+<ParamField query="networkdomain" type="string">
+  Network domain for the domain.
+</ParamField>
+
+<ParamField query="domainid" type="string">
+  Domain UUID for domains imported from external systems.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the created domain.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Domain name.
+</ResponseField>
+
+<ResponseField name="path" type="string">
+  Full path of the domain, e.g. `ROOT/engineering/backend`.
+</ResponseField>
+
+<ResponseField name="parentdomainid" type="string">
+  UUID of the parent domain.
+</ResponseField>
+
+<ResponseField name="level" type="integer">
+  Depth of the domain in the hierarchy (0 for root).
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createDomain\
+&name=engineering\
+&parentdomainid=abcdef12-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listDomains
+
+Lists domains.
+
+```
+GET /client/api?command=listDomains
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific domain UUID.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Filter by domain name.
+</ParamField>
+
+<ParamField query="level" type="integer">
+  Filter by domain depth in the hierarchy.
+</ParamField>
+
+<ParamField query="listall" type="boolean" default="false">
+  If `true`, return all domains accessible to the caller.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listDomains\
+&listall=true\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createProject
+
+Creates a new project.
+
+```
+GET /client/api?command=createProject
+```
+
+### Request parameters
+
+<ParamField query="name" type="string" required>
+  The name of the project.
+</ParamField>
+
+<ParamField query="displaytext" type="string" required>
+  Human-readable description of the project.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Account to own the project. Defaults to the caller's account.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Domain ID for the project.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the created project.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Project name.
+</ResponseField>
+
+<ResponseField name="displaytext" type="string">
+  Project description.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  Project state: `Active`, `Suspended`.
+</ResponseField>
+
+<ResponseField name="owner" type="string">
+  Name of the account that owns the project.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createProject\
+&name=web-platform\
+&displaytext=Web+Platform+Project\
+&account=engineering\
+&domainid=1234abcd-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listProjects
+
+Lists projects.
+
+```
+GET /client/api?command=listProjects
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific project UUID.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Filter by project name.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Filter by owner account.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Filter by domain.
+</ParamField>
+
+<ParamField query="state" type="string">
+  Filter by state: `Active` or `Suspended`.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listProjects\
+&account=engineering\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## updateResourceLimit
+
+Updates the resource limit for an account, domain, or project.
+
+```
+GET /client/api?command=updateResourceLimit
+```
+
+### Request parameters
+
+<ParamField query="resourcetype" type="integer" required>
+  The type of resource. Common values:
+
+  | Value | Resource              |
+  | ----- | --------------------- |
+  | `0`   | Instances             |
+  | `1`   | IP addresses          |
+  | `2`   | Volumes               |
+  | `3`   | Snapshots             |
+  | `4`   | Templates             |
+  | `5`   | Projects              |
+  | `6`   | Networks              |
+  | `7`   | VPCs                  |
+  | `8`   | CPUs                  |
+  | `9`   | Memory (MB)           |
+  | `10`  | Primary storage (GB)  |
+  | `11`  | Secondary storage (GB)|
+</ParamField>
+
+<ParamField query="max" type="long">
+  Maximum number of resources allowed. `-1` means unlimited.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Account to update the limit for.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Domain to update the limit for.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Project to update the limit for.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=updateResourceLimit\
+&resourcetype=0\
+&max=50\
+&account=engineering\
+&domainid=1234abcd-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listResourceLimits
+
+Lists resource limits for accounts, domains, or projects.
+
+```
+GET /client/api?command=listResourceLimits
+```
+
+### Request parameters
+
+<ParamField query="resourcetype" type="integer">
+  Filter by resource type (see `updateResourceLimit` for values).
+</ParamField>
+
+<ParamField query="account" type="string">
+  Filter by account.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Filter by domain.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Filter by project.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listResourceLimits\
+&account=engineering\
+&domainid=1234abcd-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## registerUserKeys
+
+Generates a new API key and Secret key for a user. The previous keys are invalidated.
+
+<Note>
+  This command requires admin privileges. Regular users can generate their own keys from the UI.
+</Note>
+
+```
+GET /client/api?command=registerUserKeys
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  UUID of the user for whom to generate keys.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="apikey" type="string">
+  The new API key for the user.
+</ResponseField>
+
+<ResponseField name="secretkey" type="string">
+  The new Secret key for the user. This is only returned once — store it securely.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=registerUserKeys\
+&id=user-uuid-here\
+&apiKey=admin-api-key\
+&signature=admin-signature"
+```
+
+---
+
+## listApiKeys
+
+Lists API key details for accounts or users. The Secret key is not returned by this command.
+
+```
+GET /client/api?command=listApiKeys
+```
+
+### Request parameters
+
+<ParamField query="userid" type="uuid">
+  Filter by specific user UUID.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="apikey" type="string">
+  The API key.
+</ResponseField>
+
+<ResponseField name="userid" type="string">
+  UUID of the user who owns this key.
+</ResponseField>
+
+<ResponseField name="username" type="string">
+  Username of the key owner.
+</ResponseField>
+
+<ResponseField name="account" type="string">
+  Account name of the key owner.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listApiKeys\
+&userid=user-uuid-here\
+&apiKey=your-api-key\
+&signature=your-signature"
+```

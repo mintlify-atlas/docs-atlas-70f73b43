@@ -1,0 +1,354 @@
+---
+title: "Installation"
+description: "Deploy Apache CloudStack management server on Ubuntu/Debian or RHEL/CentOS for production use."
+---
+
+This guide covers a production installation of the Apache CloudStack management server. You will build packages from source, configure the database, and start the CloudStack service.
+
+<Note>
+  For a quick local developer environment using the simulator hypervisor, see the [Quick Start guide](/quickstart) instead. This guide is for production deployments on real hardware.
+</Note>
+
+## System requirements
+
+### Operating system
+
+CloudStack packaging supports the following distributions:
+
+| Distribution | Versions |
+|---|---|
+| Ubuntu | 20.04, 22.04, 24.04 |
+| Debian | 12 (Bookworm) |
+| RHEL / CentOS | 8, 9 |
+
+### Software requirements
+
+| Component | Requirement |
+|---|---|
+| Java | OpenJDK 17 |
+| MySQL | 8.0+ |
+| Maven | 3.9.x (for building from source) |
+| NTP | Required for time synchronization across hosts |
+| Python | 3.x |
+
+### Hardware recommendations (management server)
+
+- CPU: 4 cores minimum, 8+ cores recommended for larger deployments
+- RAM: 8 GB minimum, 16 GB recommended
+- Disk: 100 GB for the management server; secondary storage requirements depend on template and snapshot volume
+
+## Before you begin
+
+Build CloudStack before packaging it. Complete the build steps from the [Quick Start guide](/quickstart) (through the "Build CloudStack" step), then return here.
+
+<Warning>
+  The packaging scripts expect a successful Maven build to be present. Run `mvn clean install -P systemvm,developer` from the root of the source tree before proceeding.
+</Warning>
+
+## Installation
+
+<Steps>
+  <Step title="Install build and packaging dependencies">
+    Install the tools required to create distribution packages.
+
+    <Tabs>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        apt-get -y install python-mysqldb
+        apt-get -y install debhelper
+        ```
+
+        For Ubuntu 22.04 and later, also install:
+
+        ```bash
+        apt-get -y install dpkg-dev lsb-release devscripts \
+          openjdk-17-jdk libws-commons-util-java genisoimage \
+          libcommons-codec-java libcommons-httpclient-java \
+          liblog4j1.2-java maven python3 python3-mysql.connector \
+          python3-setuptools python3-openssl fakeroot
+        ```
+      </Tab>
+      <Tab title="RHEL / CentOS">
+        ```bash
+        yum -y install rpm-build
+        yum -y install ws-commons-util
+        yum -y install gcc
+        yum -y install glibc-devel
+        yum -y install MySQL-python
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Build the distribution packages">
+    From the root of the CloudStack source tree, build the packages for your distribution.
+
+    <Tabs>
+      <Tab title="Ubuntu / Debian">
+        Fetch Maven dependencies, then build the Debian packages:
+
+        ```bash
+        mvn -P deps
+        dpkg-buildpackage -uc -us
+        ```
+
+        The generated `.deb` files are placed one level above the source directory (the parent of your `cloudstack/` checkout). You should see packages including:
+
+        - `cloudstack-management_<version>_all.deb`
+        - `cloudstack-common_<version>_all.deb`
+        - `cloudstack-agent_<version>_all.deb`
+
+        To build packages for a specific distribution variant using Docker, use the `build-deb.sh` helper:
+
+        ```bash
+        packaging/build-deb.sh
+        ```
+      </Tab>
+      <Tab title="RHEL / CentOS">
+        Run the packaging script from the `packaging/` directory. Specify the target distribution with `--distribution`.
+
+        ```bash
+        cd packaging
+        ./package.sh --distribution el8
+        ```
+
+        For RHEL/CentOS 9:
+
+        ```bash
+        ./package.sh --distribution el9
+        ```
+
+        To include non-redistributable plugins (VMware, certain storage drivers):
+
+        ```bash
+        ./package.sh --distribution el8 --pack noredist
+        ```
+
+        RPM packages are created in `dist/rpmbuild/RPMS/x86_64/`.
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Install the management server package">
+    Install the packages you built in the previous step.
+
+    <Tabs>
+      <Tab title="Ubuntu / Debian">
+        Navigate to the directory containing the generated `.deb` files (one level above the source tree):
+
+        ```bash
+        cd ..
+        dpkg -i cloudstack-management_*.deb cloudstack-common_*.deb
+        ```
+
+        Resolve any dependency issues:
+
+        ```bash
+        apt-get install -f
+        ```
+      </Tab>
+      <Tab title="RHEL / CentOS">
+        Install from the generated RPMs:
+
+        ```bash
+        yum install cloudstack/dist/rpmbuild/RPMS/x86_64/cloudstack-management-*.rpm \
+                    cloudstack/dist/rpmbuild/RPMS/x86_64/cloudstack-common-*.rpm
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Install and configure MySQL">
+    CloudStack requires MySQL 8.0+. Install and secure MySQL if it is not already present.
+
+    <Tabs>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        apt-get -y install mysql-server
+        service mysql start
+        mysql_secure_installation
+        ```
+      </Tab>
+      <Tab title="RHEL / CentOS">
+        ```bash
+        yum -y install mysql-server
+        service mysqld start
+        mysql_secure_installation
+        ```
+      </Tab>
+    </Tabs>
+
+    Add the following settings to your MySQL configuration file (`/etc/mysql/mysql.conf.d/mysqld.cnf` on Ubuntu, `/etc/my.cnf` on RHEL/CentOS) under the `[mysqld]` section:
+
+    ```ini
+    [mysqld]
+    innodb_rollback_on_timeout=1
+    innodb_lock_wait_timeout=600
+    max_connections=350
+    log-bin=mysql-bin
+    binlog-format = 'ROW'
+    ```
+
+    Restart MySQL after making these changes:
+
+    <Tabs>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        service mysql restart
+        ```
+      </Tab>
+      <Tab title="RHEL / CentOS">
+        ```bash
+        service mysqld restart
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Set up the CloudStack database">
+    Create the CloudStack database user and deploy the schema. Replace `<root-password>` with your MySQL root password.
+
+    ```bash
+    cloudstack-setup-databases cloud:<db-password>@localhost \
+      --deploy-as=root:<root-password>
+    ```
+
+    This command:
+    - Creates a `cloud` database user with the password you specify
+    - Creates the `cloud` and `cloud_usage` databases
+    - Applies the CloudStack schema and initial seed data
+
+    <Tip>
+      If you need to reset the database at any point, re-run this command. It drops and recreates the databases.
+    </Tip>
+  </Step>
+
+  <Step title="Configure NTP">
+    Time synchronization is critical for CloudStack to function correctly. Install and enable NTP on the management server.
+
+    <Tabs>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        apt-get -y install chrony
+        systemctl enable chrony
+        systemctl start chrony
+        ```
+      </Tab>
+      <Tab title="RHEL / CentOS">
+        ```bash
+        yum -y install chrony
+        systemctl enable chronyd
+        systemctl start chronyd
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Configure Hyper-V vhd-util (XenServer only)">
+    If you plan to use XenServer as a hypervisor, download the `vhd-util` binary and place it in the correct location.
+
+    <Tabs>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        wget https://download.cloudstack.org/tools/vhd-util \
+          -O /usr/lib/cloud/common/scripts/vm/hypervisor/xenserver/vhd-util
+        chmod +x /usr/lib/cloud/common/scripts/vm/hypervisor/xenserver/vhd-util
+        ```
+      </Tab>
+      <Tab title="RHEL / CentOS">
+        ```bash
+        wget https://download.cloudstack.org/tools/vhd-util \
+          -O /usr/lib64/cloud/common/scripts/vm/hypervisor/xenserver/vhd-util
+        chmod +x /usr/lib64/cloud/common/scripts/vm/hypervisor/xenserver/vhd-util
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Start the CloudStack management server">
+    Run the setup script, then start the service.
+
+    ```bash
+    cloudstack-setup-management
+    ```
+
+    Start and enable the service:
+
+    <Tabs>
+      <Tab title="systemd (Ubuntu 20.04+ / RHEL 8+)">
+        ```bash
+        systemctl enable cloudstack-management
+        systemctl start cloudstack-management
+        ```
+
+        Check the service status:
+
+        ```bash
+        systemctl status cloudstack-management
+        ```
+      </Tab>
+      <Tab title="SysVinit (older systems)">
+        ```bash
+        service cloudstack-management start
+        chkconfig cloudstack-management on
+        ```
+      </Tab>
+    </Tabs>
+
+    Monitor the management server log during startup:
+
+    ```bash
+    tail -f /var/log/cloudstack/management/management-server.log
+    ```
+
+    The server is ready when you see a line similar to:
+
+    ```
+    INFO  [c.c.s.ConfigurationServerImpl] (main) - Management server setup is done.
+    ```
+  </Step>
+
+  <Step title="Complete initial configuration via the setup wizard">
+    Open `http://<management-server-ip>:8080` in your browser. Log in with:
+
+    | Field | Value |
+    |---|---|
+    | Username | `admin` |
+    | Password | `password` |
+    | Domain | Leave blank |
+
+    <Warning>
+      Change the default admin password immediately. Go to **Accounts** → **admin** → **Change Password** after your first login.
+    </Warning>
+
+    The setup wizard guides you through creating your first infrastructure configuration:
+
+    1. **Zone** — Enter a name, DNS servers, and internal/external IP ranges for your first zone.
+    2. **Network** — Configure the physical network, guest traffic, and (for advanced zones) public traffic.
+    3. **Pod** — Enter the pod name, reserved IP range for the pod, and gateway information.
+    4. **Cluster** — Name your first cluster and select the hypervisor type.
+    5. **Host** — Add the first hypervisor host by entering its IP address and credentials.
+    6. **Primary storage** — Configure shared storage (NFS, iSCSI, or Ceph) for the cluster.
+    7. **Secondary storage** — Configure NFS secondary storage for templates, ISOs, and snapshots.
+
+    After completing the wizard, CloudStack will connect to your hypervisor host and prepare the secondary storage. This may take several minutes.
+  </Step>
+</Steps>
+
+## Post-installation
+
+After the setup wizard completes:
+
+- **Add more hosts** — Go to **Infrastructure** → **Clusters** → select your cluster → **Add Host**.
+- **Upload a template** — Go to **Images** → **Templates** → **Register Template** to add a guest OS template.
+- **Create an offering** — Go to **Service Offerings** → **Compute Offerings** to define VM sizes available to users.
+- **Create a network offering** — Define the network services (DHCP, DNS, NAT, firewall) available to guest VMs.
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand zones, pods, clusters, and the full CloudStack architecture.
+  </Card>
+  <Card title="Operations guide" icon="sliders" href="/operations/zones-pods-clusters">
+    Configure zones, pods, clusters, and add hypervisor hosts after installation.
+  </Card>
+</CardGroup>

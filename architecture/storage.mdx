@@ -1,0 +1,186 @@
+---
+title: "Storage Architecture"
+description: "Understand CloudStack's two-tier storage model: primary storage for VM disks and secondary storage for templates and snapshots."
+---
+
+CloudStack uses a two-tier storage model. **Primary storage** holds the running disk images of virtual machines. **Secondary storage** holds templates, ISOs, and snapshots that are not actively in use by a running VM. The two tiers have different scoping, lifecycle, and performance requirements, and are served by separate plugin subsystems.
+
+## Primary storage
+
+Primary storage is where VM disk volumes live while a VM is running. It must be directly accessible from the hypervisor hosts in a cluster.
+
+### Storage pool scoping
+
+A **storage pool** is a unit of primary storage that CloudStack manages. Pools are scoped to control which hosts can use them:
+
+| Scope | Description |
+|-------|-------------|
+| **Cluster-wide** | Shared storage (NFS, iSCSI, Fibre Channel, Ceph/RBD) accessible by all hosts in a cluster. Enables live migration. |
+| **Zone-wide** | Storage accessible by any host in the zone regardless of cluster. Uncommon for block storage; used by some Ceph deployments. |
+| **Host-local** | Disk storage local to a single hypervisor host. Fast, but live migration requires storage migration first. |
+
+### Supported primary storage backends
+
+<Tabs>
+  <Tab title="NFS">
+    Network File System is the most widely used primary storage backend. The management server mounts the NFS export and creates per-volume directories (QCOW2 or VMDK files).
+
+    - Supported on KVM, VMware, XenServer
+    - Enables live migration within a cluster
+    - Storage pool type: `NetworkFilesystem`
+    - Plugin: `plugins/storage/volume/default` (`LibvirtStorageAdaptor` on KVM)
+  </Tab>
+  <Tab title="iSCSI">
+    iSCSI block storage is supported on KVM using the `IscsiAdmStorageAdaptor` and on VMware via vSphere's built-in iSCSI initiator.
+
+    - Supported on KVM (`IscsiAdmStorageAdaptor`, `IscsiAdmStoragePool`)
+    - IQN-based LUN mapping
+    - Multipath support via `MultipathSCSIAdapterBase`
+    - Storage pool type: `IscsiLUN`
+  </Tab>
+  <Tab title="Ceph / RBD">
+    Ceph RADOS Block Device (RBD) is the recommended shared primary storage for KVM deployments at scale.
+
+    - Natively supported via libvirt's `rbd://` driver (`LibvirtStorageAdaptor`)
+    - Storage pool type: `RBD`
+    - Supports thin provisioning, snapshots, and cloning via Ceph COW
+    - Enables live migration, storage migration, and cross-cluster volume moves
+  </Tab>
+  <Tab title="Fibre Channel">
+    Fibre Channel is supported on KVM through `FiberChannelAdapter`.
+
+    - Requires FC HBAs and zoning on the SAN fabric
+    - Storage pool type: `FiberChannel`
+    - LUN discovery is automatic on host startup
+  </Tab>
+  <Tab title="PowerFlex / ScaleIO">
+    Dell PowerFlex (formerly ScaleIO, formerly VxFlex) is a software-defined block storage option.
+
+    - Implemented in `plugins/storage/volume/scaleio` via `ScaleIOStorageAdaptor` and `ScaleIOStoragePool`
+    - Supported on KVM hosts with the PowerFlex SDC client installed
+    - Storage pool type: `PowerFlex`
+  </Tab>
+</Tabs>
+
+### Additional volume plugins
+
+The `plugins/storage/volume/` directory contains further primary storage integrations:
+
+| Plugin directory | Product |
+|-----------------|---------|
+| `solidfire` | NetApp SolidFire / Element OS |
+| `nexenta` | Nexenta NexentaStor |
+| `linstor` | LINBIT LINSTOR / DRBD |
+| `storpool` | StorPool distributed storage |
+| `primera` | HPE Primera / 3PAR |
+| `flasharray` | Pure Storage FlashArray |
+| `datera` | Datera elastic block storage |
+| `adaptive` | Adaptive storage plugin |
+| `cloudbyte` | CloudByte ElastiStor |
+
+## Secondary storage
+
+Secondary storage holds objects that are not directly attached to a running VM:
+
+- VM templates (QCOW2, OVA, VHD, raw images)
+- ISO images
+- Volume snapshots
+- VM snapshots (metadata + disk delta)
+
+Secondary storage is **zone-scoped**: a single secondary storage endpoint is shared by all pods and clusters in a zone. The **Secondary Storage VM (SSVM)** mounts the secondary storage and acts as a proxy for hypervisor hosts that do not have direct access to the secondary storage endpoint.
+
+### Supported secondary storage backends
+
+| Plugin | Backend |
+|--------|---------|
+| `plugins/storage/image/default` | NFS (default; `nfs://` URL) |
+| `plugins/storage/image/s3` | S3-compatible object storage (AWS S3, MinIO, Ceph RADOS GW) |
+| `plugins/storage/image/swift` | OpenStack Swift |
+
+<Tip>
+For production deployments with many zones or high template-download volume, use an S3-compatible backend. NFS secondary storage creates a single NFS server as a bottleneck; S3 scales horizontally and is accessible from anywhere.
+</Tip>
+
+## Object storage
+
+CloudStack supports object storage as a first-class resource via the `engine/storage/object/` subsystem. Tenants can create object storage buckets and manage objects through the CloudStack API.
+
+Object storage plugins in `plugins/storage/object/`:
+
+| Plugin directory | Backend |
+|-----------------|---------|
+| `ceph` | Ceph RADOS Gateway (S3-compatible) |
+| `minio` | MinIO |
+| `cloudian` | Cloudian HyperStore |
+| `simulator` | Simulator for testing |
+
+## Volume lifecycle
+
+<Steps>
+  <Step title="Create">
+    A volume is created from a disk offering (`createVolume`). The management server selects a storage pool based on the disk offering's tags and the cluster/zone scope. On KVM, `LibvirtStorageAdaptor.createPhysicalDisk()` provisions the backing file (QCOW2 by default) in the pool.
+  </Step>
+  <Step title="Attach">
+    The volume is attached to a running VM (`attachVolume`). CloudStack sends a `CreateCommand` or `AttachVolumeCommand` to the hypervisor host via the agent. The hypervisor hot-plugs the virtual disk device.
+  </Step>
+  <Step title="Snapshot">
+    A snapshot captures the state of a volume at a point in time (`createSnapshot`). On shared primary storage CloudStack uses hypervisor-level snapshots; the resulting snapshot object is then copied to secondary storage by the SSVM.
+  </Step>
+  <Step title="Detach">
+    The volume is hot-unplugged from the VM and returns to a detached state. It remains in primary storage and can be re-attached to the same or a different VM.
+  </Step>
+  <Step title="Migrate">
+    A volume can be live-migrated between storage pools (`migrateVolume`) without stopping the VM, provided the hypervisor and storage backend support it. On KVM this uses `virsh blockcopy`; on VMware it uses Storage vMotion.
+  </Step>
+  <Step title="Destroy">
+    When a volume is deleted it is marked for expiration. After the expunge delay it is removed from primary storage by the storage garbage collector in the management server.
+  </Step>
+</Steps>
+
+## Disk offerings
+
+A **disk offering** defines the size and performance characteristics of a volume. Administrators configure disk offerings; tenants select from available offerings when creating volumes or VM root disks.
+
+Disk offering attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `diskSize` | Fixed size in GB, or 0 for custom size |
+| `minIops` / `maxIops` | IOPS limits (enforced where the storage backend supports QoS — e.g. SolidFire, PowerFlex) |
+| `storageTags` | Comma-separated tags that must match a storage pool's tags for placement |
+| `localStorageRequired` | Forces placement on host-local storage |
+| `customized` | Allows tenants to specify size at volume-creation time |
+
+Storage tags connect disk offerings to specific storage pools. A pool is tagged at configuration time; a disk offering with the same tag will only be placed on matching pools.
+
+## Storage subsystem internals
+
+The `engine/storage/` module contains the internal orchestration layer between the management server and storage plugins:
+
+<Tree>
+  <Tree.Folder name="engine/storage/" defaultOpen>
+    <Tree.File name="cache/" />
+    <Tree.File name="configdrive/" />
+    <Tree.File name="datamotion/" />
+    <Tree.Folder name="image/" defaultOpen>
+      <Tree.File name="Image store driver abstraction" />
+    </Tree.Folder>
+    <Tree.File name="object/" />
+    <Tree.File name="snapshot/" />
+    <Tree.Folder name="volume/" defaultOpen>
+      <Tree.File name="Volume orchestration" />
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
+
+- **`datamotion/`** — handles data movement between storage endpoints (primary → secondary, zone to zone) using the SSVM as a transfer agent.
+- **`cache/`** — template and snapshot caching layer that keeps frequently used templates in primary storage to avoid repeated downloads from secondary storage.
+- **`configdrive/`** — manages config drive ISO images that deliver cloud-init user data to VMs.
+
+## Managed NFS storage
+
+The `ManagedNfsStorageAdaptor` provides a mode where CloudStack manages NFS exports on a per-volume basis rather than presenting a single shared directory. This enables tighter access control and is used by some enterprise NFS filers.
+
+## Storage for SharedFS
+
+The `plugins/storage/sharedfs/` plugin provides shared file system services (e.g. NFS exports hosted on CloudStack-managed VMs) that can be mounted by multiple guest VMs simultaneously.

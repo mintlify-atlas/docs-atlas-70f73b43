@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Apache CloudStack",
+  "projectType": "infrastructure",
+  "projectName": "Apache CloudStack",
+  "projectDescription": "Apache CloudStack is an open-source IaaS cloud computing platform for deploying and managing large-scale virtual machine infrastructure across multiple hypervisors.",
   "theme": "aspen",
-  "colors": {
-    "primary": "#37a2d0",
-    "light": "#80c6e0",
-    "dark": "#1f5989"
-  },
-  "favicon": "https://media.brand.dev/fdfa7790-a44e-4f26-8f63-06489acd871c.jpg",
-  "logo": {
-    "light": "https://media.brand.dev/8b0e2b3b-85f2-4937-8759-d9e76a31c761.png",
-    "dark": "https://media.brand.dev/8b0e2b3b-85f2-4937-8759-d9e76a31c761.png"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/apache/cloudstack"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/apache/cloudstack"
-    }
-  },
+  "primaryColor": "#37a2d0",
+  "lightColor": "#80c6e0",
+  "darkColor": "#1f5989",
   "navigation": {
     "tabs": [
       {
@@ -97,5 +80,39 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Multi-hypervisor support (KVM, VMware vSphere, XenServer, XCP-ng, Hyper-V)",
+    "Compute orchestration with VM lifecycle management",
+    "Network-as-a-Service with VPC, VPN, firewall, and load balancing",
+    "Primary and secondary storage management",
+    "Multi-tenancy with accounts, domains, and role-based access control",
+    "Kubernetes cluster management via CKS (CloudStack Kubernetes Service)",
+    "Comprehensive REST API with query-based interface",
+    "High availability and disaster recovery support",
+    "Extensive plugin system for hypervisors, networking, and storage",
+    "Web UI, CLI tools, and full-featured API access"
+  ],
+  "publicApiSurface": [
+    "deployVirtualMachine",
+    "destroyVirtualMachine",
+    "startVirtualMachine",
+    "stopVirtualMachine",
+    "listVirtualMachines",
+    "createNetwork",
+    "createVPC",
+    "createVolume",
+    "attachVolume",
+    "createSnapshot",
+    "listZones",
+    "listHosts",
+    "listClusters",
+    "createAccount",
+    "listAccounts",
+    "createUser",
+    "deployKubernetesCluster",
+    "listTemplates",
+    "registerTemplate",
+    "listServiceOfferings"
+  ]
 }

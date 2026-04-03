@@ -1,0 +1,258 @@
+---
+title: "Authentication Integrations"
+description: "Configure CloudStack authentication: LDAP, SAML 2.0 SSO, OAuth2, and two-factor authentication."
+---
+
+CloudStack supports multiple authentication mechanisms that can be enabled independently or in combination. Built-in username/password authentication is always available. LDAP, SAML 2.0, and OAuth2 are optional plugins that delegate credential verification to external identity providers. Two-factor authentication (TOTP or static PIN) can be layered on top of any primary authentication method.
+
+## Built-in authentication
+
+CloudStack ships with three password hashing algorithms selectable per deployment. All are implemented as `UserAuthenticator` plugins in `plugins/user-authenticators/`.
+
+<AccordionGroup>
+  <Accordion title="PBKDF2 (recommended)">
+    Password-Based Key Derivation Function 2 with HMAC-SHA1. The default and recommended algorithm for new deployments. Stored passwords include an iteration count and salt, making them resistant to brute-force attacks.
+
+    Plugin location: `plugins/user-authenticators/pbkdf2`
+  </Accordion>
+  <Accordion title="SHA-256 with salt">
+    SHA-256 hash with a per-user random salt. Stronger than MD5 but less computationally expensive than PBKDF2.
+
+    Plugin location: `plugins/user-authenticators/sha256salted`
+  </Accordion>
+  <Accordion title="MD5 (legacy)">
+    MD5 hash. Retained for backward compatibility with installations that were created before stronger algorithms were available. Migration to PBKDF2 is strongly recommended.
+
+    Plugin location: `plugins/user-authenticators/md5`
+  </Accordion>
+</AccordionGroup>
+
+## API key authentication
+
+For programmatic API access, every CloudStack user account has an API key and a Secret key. Requests are signed using HMAC-SHA1 (or HMAC-SHA256) with the Secret key.
+
+To generate an API key pair:
+
+1. Log in to the CloudStack UI as the user.
+2. Navigate to **Account** > **My Account** > **API Credentials**.
+3. Click **Generate Keys**.
+
+Or use the API:
+
+```bash
+cloudstack-api registerUserKeys userid="<user-uuid>"
+```
+
+Signed requests include a `apiKey`, `signature`, and `expires` parameter. See the CloudStack API documentation for the full signing algorithm.
+
+<Tip>
+Treat Secret keys like passwords. Store them in a secrets manager or environment variable, never in source code.
+</Tip>
+
+## LDAP / Active Directory
+
+The LDAP plugin (`plugins/user-authenticators/ldap`) authenticates CloudStack users against an OpenLDAP or Microsoft Active Directory server. Configuration is domain-scoped, allowing different LDAP servers per CloudStack domain.
+
+### Configuration keys
+
+All keys are in the `Advanced` category and are scoped to a CloudStack domain.
+
+| Configuration key | Default | Description |
+|---|---|---|
+| `ldap.basedn` | _(none)_ | Base DN for LDAP searches (e.g. `dc=example,dc=com`) |
+| `ldap.bind.principal` | _(none)_ | Bind DN for LDAP authentication (stored in Secure category) |
+| `ldap.bind.password` | _(none)_ | Bind password (stored in Secure category) |
+| `ldap.provider` | `openldap` | LDAP provider type: `openldap` or `microsoftad` |
+| `ldap.user.object` | `inetOrgPerson` | LDAP object class for users |
+| `ldap.username.attribute` | `uid` | Attribute containing the username |
+| `ldap.email.attribute` | `mail` | Attribute containing the user's email |
+| `ldap.firstname.attribute` | `givenname` | Attribute containing the first name |
+| `ldap.lastname.attribute` | `sn` | Attribute containing the last name |
+| `ldap.group.object` | `groupOfUniqueNames` | LDAP object class for groups |
+| `ldap.group.user.uniquemember` | `uniquemember` | Attribute listing group members |
+| `ldap.user.memberof.attribute` | `memberof` | Reverse membership attribute on user objects |
+| `ldap.nested.groups.enable` | `true` | Query nested groups when resolving group membership |
+| `ldap.search.group.principle` | _(none)_ | Restrict login to members of this group DN |
+| `ldap.read.timeout` | `1000` | LDAP connection read timeout in milliseconds |
+| `ldap.request.page.size` | `1000` | Number of users requested per LDAP page |
+| `ldap.truststore` | _(none)_ | Path to truststore for LDAPS/TLS connections |
+| `ldap.truststore.password` | _(none)_ | Truststore password (stored in Secure category) |
+
+If both `ldap.bind.principal` and `ldap.bind.password` are unset, the LDAP connection uses anonymous bind. When they are set, simple bind authentication is used.
+
+### Adding an LDAP server
+
+```bash
+cloudstack-api ldapAddConfiguration \
+  hostname="ldap.example.com" \
+  port=389 \
+  domainid="<domain-uuid>"
+```
+
+For LDAPS (TLS), use port 636 and configure `ldap.truststore` with a valid truststore containing the LDAP server's CA certificate.
+
+### Importing and syncing users
+
+<Steps>
+  <Step title="List available LDAP users">
+    ```bash
+    cloudstack-api listLdapUsers domainid="<domain-uuid>"
+    ```
+  </Step>
+  <Step title="Import selected users">
+    ```bash
+    cloudstack-api importLdapUsers \
+      domainid="<domain-uuid>" \
+      accounttype=0 \
+      group="cloudstack-users"
+    ```
+  </Step>
+  <Step title="Map a domain to an LDAP group">
+    Use `linkDomainToLdap` to automatically assign imported users from a specific LDAP group to a CloudStack domain with a given account type and role.
+  </Step>
+</Steps>
+
+### Provider differences
+
+Setting `ldap.provider` to `microsoftad` activates the `ADLdapUserManagerImpl`, which handles Microsoft Active Directory specifics such as the `userPrincipalName` attribute and nested group resolution using the `memberof` chain. Setting it to `openldap` uses `OpenLdapUserManagerImpl`, which uses `groupOfUniqueNames` and `uniquemember` attributes by default.
+
+## SAML 2.0 SSO
+
+The SAML 2.0 plugin (`plugins/user-authenticators/saml2`) implements CloudStack as a SAML Service Provider (SP). Users are redirected to a registered Identity Provider (IdP) for authentication and returned to CloudStack with a SAML assertion.
+
+### Enabling SAML SSO
+
+Set `saml2.enabled` to `true` in Global Settings. CloudStack will then expose SP metadata and accept SSO login flows.
+
+### Configuration keys
+
+| Configuration key | Default | Description |
+|---|---|---|
+| `saml2.enabled` | `false` | Enable the SAML SSO plugin |
+| `saml2.sp.id` | `org.apache.cloudstack` | SAML SP Entity ID |
+| `saml2.sp.sso.url` | `http://localhost:8080/client/api?command=samlSso` | SP Assertion Consumer Service URL |
+| `saml2.sp.slo.url` | `http://localhost:8080/client/` | SP Single Logout URL |
+| `saml2.redirect.url` | `http://localhost:8080/client` | CloudStack UI URL to redirect after successful SSO |
+| `saml2.idp.metadata.url` | _(example IdP)_ | URL of the IdP SAML metadata XML |
+| `saml2.default.idpid` | _(example IdP entity ID)_ | Default IdP entity ID when multiple IdPs are configured |
+| `saml2.user.attribute` | `uid` | SAML attribute containing the CloudStack username |
+| `saml2.sigalg` | `SHA1` | Signature algorithm for SAML requests: `SHA1`, `SHA256`, `SHA384`, or `SHA512` |
+| `saml2.check.signature` | `true` | Enforce SAML response signature validation (disabling is not recommended) |
+| `saml2.force.authn` | `false` | Force re-authentication at the IdP for each login |
+| `saml2.timeout` | `1800` | IdP metadata refresh interval in seconds (minimum 300) |
+| `saml2.append.idpdomain` | `false` | Append the IdP domain to user/account names in the UI |
+| `saml2.sp.contact.person` | `CloudStack Developers` | SP metadata contact person name |
+| `saml2.sp.contact.email` | `dev@cloudstack.apache.org` | SP metadata contact email |
+| `saml2.sp.org.name` | `Apache CloudStack` | SP metadata organization name |
+| `saml2.sp.org.url` | `http://cloudstack.apache.org` | SP metadata organization URL |
+
+### SP metadata endpoint
+
+The SP metadata XML is available at:
+
+```
+http://<management-server>:8080/client/api?command=getSPMetadata
+```
+
+Register this URL with your IdP as the Service Provider, and use your IdP's metadata XML URL as the value for `saml2.idp.metadata.url`.
+
+### Attribute mapping
+
+The SAML response must include the attribute named in `saml2.user.attribute` (default: `uid`). This attribute value must match an existing CloudStack username. Users must be pre-created in CloudStack before SSO login will succeed unless the `saml2.append.idpdomain` option is used along with domain-level user provisioning.
+
+<Warning>
+Setting `saml2.check.signature` to `false` disables response signature validation and introduces a security risk. Do not disable this in production environments.
+</Warning>
+
+## OAuth2
+
+The OAuth2 plugin (`plugins/user-authenticators/oauth2`) allows users to authenticate using social login providers such as Google or GitHub. Each provider is registered as a named OAuth2 configuration in CloudStack.
+
+### Enabling OAuth2
+
+Set `oauth2.enabled` to `true`. Configure the list of active providers with `oauth2.plugins` (default: `google,github`) and optionally exclude specific providers with `oauth2.plugins.exclude`.
+
+### Registering an OAuth2 provider
+
+```bash
+cloudstack-api registerOAuthProvider \
+  provider="google" \
+  clientid="<google-client-id>" \
+  secretkey="<google-client-secret>" \
+  redirecturi="https://cloudstack.example.com/client/api?command=oauthlogin"
+```
+
+| Parameter | Description |
+|---|---|
+| `provider` | Provider name (must match a value in `oauth2.plugins`) |
+| `clientid` | OAuth2 client ID from the provider's developer console |
+| `secretkey` | OAuth2 client secret |
+| `redirecturi` | Redirect URI registered with the OAuth2 provider |
+
+Manage registered providers:
+
+```bash
+# List providers
+cloudstack-api listOAuthProviders
+
+# Update a provider
+cloudstack-api updateOAuthProvider provider="google" secretkey="<new-secret>"
+
+# Remove a provider
+cloudstack-api deleteOAuthProvider id="<provider-uuid>"
+```
+
+The login flow uses `verifyOAuthCodeAndGetUser` internally to exchange the authorization code for user identity information (email), which is then matched to a CloudStack account.
+
+## Two-factor authentication
+
+CloudStack supports pluggable two-factor authentication (2FA) through the `plugins/user-two-factor-authenticators/` directory. Users enable 2FA on their own accounts. Administrators can mandate 2FA at the domain or account level.
+
+Two providers are included:
+
+<Tabs>
+  <Tab title="TOTP">
+    Time-Based One-Time Password (TOTP) as defined in RFC 6238. Compatible with any authenticator app that supports TOTP (Google Authenticator, Authy, 1Password, etc.).
+
+    The implementation uses the `de.taimos.totp` library. When a user sets up TOTP, CloudStack generates a random 20-byte secret, encodes it as Base32, and stores it on the user account (`keyFor2fa`). The authenticator app is seeded with this Base32 key by scanning a QR code or entering it manually.
+
+    On each login, CloudStack calls `TOTP.getOTP(hexKey)` and compares the result to the user-submitted code.
+
+    **To set up TOTP for a user:**
+    ```bash
+    cloudstack-api setupUserTwoFactorAuthentication \
+      userid="<user-uuid>" \
+      provider="totp"
+    ```
+
+    The response includes the Base32 secret to enter in the authenticator app.
+  </Tab>
+  <Tab title="Static PIN">
+    A fixed PIN code stored on the user account. Simpler than TOTP but provides no time-based protection against replay attacks.
+
+    Plugin name: `static-pin` (class `StaticPinUserTwoFactorAuthenticator`).
+
+    ```bash
+    cloudstack-api setupUserTwoFactorAuthentication \
+      userid="<user-uuid>" \
+      provider="static-pin"
+    ```
+
+    After setup, the user must supply their PIN on every login as the second factor.
+  </Tab>
+</Tabs>
+
+### Validating the 2FA code
+
+After primary authentication succeeds, if the user has 2FA configured, the API returns a session token with 2FA status `REQUIRED`. The client must then call:
+
+```bash
+cloudstack-api validateUserTwoFactorAuthenticationCode \
+  codefor2fa="<otp-or-pin>"
+```
+
+A successful response completes the login session.
+
+<Tip>
+Administrators can disable 2FA for a user if they lose access to their authenticator device using `disableUserTwoFactorAuthentication`.
+</Tip>

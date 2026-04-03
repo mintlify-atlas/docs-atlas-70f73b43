@@ -1,0 +1,748 @@
+---
+title: "Networking API"
+description: "CloudStack API reference for networking: networks, VPCs, public IPs, firewall rules, load balancers, and VPN."
+---
+
+## createNetwork
+
+Creates a guest network in a zone.
+
+```
+GET /client/api?command=createNetwork
+```
+
+### Request parameters
+
+<ParamField query="name" type="string" required>
+  The name of the network.
+</ParamField>
+
+<ParamField query="networkofferingid" type="uuid" required>
+  The network offering ID to use for this network.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid" required>
+  The zone ID in which to create the network.
+</ParamField>
+
+<ParamField query="displaytext" type="string">
+  Human-readable description of the network. Defaults to `name` if not specified.
+</ParamField>
+
+<ParamField query="gateway" type="string">
+  The gateway IP address. Required for shared networks and isolated networks in a VPC.
+</ParamField>
+
+<ParamField query="netmask" type="string">
+  The subnet mask. Required for shared networks and isolated networks in a VPC.
+</ParamField>
+
+<ParamField query="startip" type="string">
+  The beginning IP address of the network's IP range.
+</ParamField>
+
+<ParamField query="endip" type="string">
+  The ending IP address of the network's IP range. Defaults to `startip` if not specified.
+</ParamField>
+
+<ParamField query="vpcid" type="uuid">
+  The VPC this network belongs to.
+</ParamField>
+
+<ParamField query="aclid" type="uuid">
+  Network ACL ID to associate with the network.
+</ParamField>
+
+<ParamField query="acltype" type="string">
+  Access control type: `Account` (only the account owner can use) or `Domain` (all accounts in the domain can use).
+</ParamField>
+
+<ParamField query="account" type="string">
+  Account that will own the network. Must be used with `domainid`.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Domain ID of the account owning the network.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Optional project for the network.
+</ParamField>
+
+<ParamField query="networkdomain" type="string">
+  Network domain for the network.
+</ParamField>
+
+<ParamField query="ip6gateway" type="string">
+  IPv6 gateway. Required for shared IPv6 networks.
+</ParamField>
+
+<ParamField query="ip6cidr" type="string">
+  IPv6 CIDR. Must be at least /64.
+</ParamField>
+
+<ParamField query="dns1" type="string">
+  First IPv4 DNS server for the network. Introduced in 4.18.
+</ParamField>
+
+<ParamField query="dns2" type="string">
+  Second IPv4 DNS server for the network. Introduced in 4.18.
+</ParamField>
+
+<ParamField query="publicmtu" type="integer">
+  MTU for the virtual router's public-facing interface. Introduced in 4.18.
+</ParamField>
+
+<ParamField query="privatemtu" type="integer">
+  MTU for the virtual router's private interface(s). Introduced in 4.18.
+</ParamField>
+
+<ParamField query="sourcenatip" type="string">
+  IPv4 address to assign to the public interface of the network's virtual router, used as the source NAT address. Introduced in 4.19.
+</ParamField>
+
+<ParamField query="cidrsize" type="integer">
+  CIDR size of the IPv4 network. Required for isolated networks in ROUTED mode for regular users. Introduced in 4.20.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the created network.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Name of the network.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  State of the network: `Allocated`, `Setup`, `Implementing`, `Implemented`, `Shutdown`, `Destroy`.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Network type: `Isolated`, `Shared`, `L2`.
+</ResponseField>
+
+<ResponseField name="cidr" type="string">
+  IPv4 CIDR of the network.
+</ResponseField>
+
+<ResponseField name="gateway" type="string">
+  Gateway IP address.
+</ResponseField>
+
+<ResponseField name="zoneid" type="string">
+  UUID of the zone.
+</ResponseField>
+
+<ResponseField name="vpcid" type="string">
+  UUID of the VPC this network belongs to, if any.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createNetwork\
+&name=app-tier\
+&networkofferingid=3f5d2b8c-...\
+&zoneid=a2f3de84-...\
+&vpcid=c4e9f1b2-...\
+&gateway=10.1.1.1\
+&netmask=255.255.255.0\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listNetworks
+
+Lists available networks.
+
+```
+GET /client/api?command=listNetworks
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific network UUID.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  Filter by zone.
+</ParamField>
+
+<ParamField query="vpcid" type="uuid">
+  Filter networks within a specific VPC.
+</ParamField>
+
+<ParamField query="type" type="string">
+  Filter by network type: `Isolated`, `Shared`, `L2`.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Filter by account name.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Filter by domain.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Filter by project.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listNetworks\
+&zoneid=a2f3de84-...\
+&type=Isolated\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createVPC
+
+Creates a Virtual Private Cloud.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createVPC
+```
+
+### Request parameters
+
+<ParamField query="name" type="string" required>
+  The name of the VPC.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid" required>
+  The ID of the availability zone.
+</ParamField>
+
+<ParamField query="vpcofferingid" type="uuid" required>
+  The ID of the VPC offering.
+</ParamField>
+
+<ParamField query="cidr" type="string">
+  The CIDR block for the VPC. All VPC guest network CIDRs must fall within this range.
+</ParamField>
+
+<ParamField query="cidrsize" type="integer">
+  CIDR size for the VPC. Required for VPCs in ROUTED mode for regular users. Introduced in 4.20.
+</ParamField>
+
+<ParamField query="displaytext" type="string">
+  Display text for the VPC. Defaults to `name`.
+</ParamField>
+
+<ParamField query="networkdomain" type="string">
+  Network domain for all networks inside the VPC.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Account that will own the VPC. Must be used with `domainid`.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Domain ID for the VPC.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Create the VPC for a specific project.
+</ParamField>
+
+<ParamField query="start" type="boolean" default="true">
+  If `false`, the VPC's virtual router is not allocated until the first network is implemented.
+</ParamField>
+
+<ParamField query="dns1" type="string">
+  First IPv4 DNS server for the VPC. Introduced in 4.18.
+</ParamField>
+
+<ParamField query="dns2" type="string">
+  Second IPv4 DNS server for the VPC. Introduced in 4.18.
+</ParamField>
+
+<ParamField query="publicmtu" type="integer">
+  MTU for the VPC virtual router's public-facing interfaces. Introduced in 4.18.
+</ParamField>
+
+<ParamField query="sourcenatip" type="string">
+  IPv4 address to assign to the VPC router's public interface, used as source NAT. Introduced in 4.19.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the created VPC.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Name of the VPC.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  State of the VPC: `Inactive`, `Enabled`, `Restart`.
+</ResponseField>
+
+<ResponseField name="cidr" type="string">
+  CIDR block of the VPC.
+</ResponseField>
+
+<ResponseField name="zoneid" type="string">
+  UUID of the zone.
+</ResponseField>
+
+<ResponseField name="account" type="string">
+  Account that owns the VPC.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createVPC\
+&name=production-vpc\
+&zoneid=a2f3de84-...\
+&vpcofferingid=7b3c1e9d-...\
+&cidr=10.0.0.0/16\
+&displaytext=Production+VPC\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listVPCs
+
+Lists VPCs.
+
+```
+GET /client/api?command=listVPCs
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific VPC UUID.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  Filter by zone.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Filter by account.
+</ParamField>
+
+<ParamField query="state" type="string">
+  Filter by VPC state.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listVPCs\
+&zoneid=a2f3de84-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## associateIpAddress
+
+Acquires and associates a public IP address with an account. At least one of `zoneid`, `networkid`, or `vpcid` is required.
+
+**Async:** Yes
+
+```
+GET /client/api?command=associateIpAddress
+```
+
+### Request parameters
+
+<ParamField query="zoneid" type="uuid">
+  The ID of the availability zone from which to acquire a public IP.
+</ParamField>
+
+<ParamField query="networkid" type="uuid">
+  The network to associate the IP address with.
+</ParamField>
+
+<ParamField query="vpcid" type="uuid">
+  The VPC to associate the IP address with.
+</ParamField>
+
+<ParamField query="account" type="string">
+  The account to associate the IP with. Must be used with `domainid`.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  Domain ID for the IP association.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Associate the IP with a project.
+</ParamField>
+
+<ParamField query="isportable" type="boolean" default="false">
+  If `true`, the IP address can be transferred across zones.
+</ParamField>
+
+<ParamField query="ipaddress" type="string">
+  A specific IP address to acquire (if available).
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  UUID of the allocated IP address.
+</ResponseField>
+
+<ResponseField name="ipaddress" type="string">
+  The public IP address string.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  State of the IP: `Allocating`, `Allocated`, `Releasing`.
+</ResponseField>
+
+<ResponseField name="zoneid" type="string">
+  UUID of the zone.
+</ResponseField>
+
+<ResponseField name="networkid" type="string">
+  UUID of the associated network.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=associateIpAddress\
+&networkid=9c4e3b1a-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## disassociateIpAddress
+
+Disassociates an acquired public IP from an account and releases it back to the pool.
+
+**Async:** Yes
+
+```
+GET /client/api?command=disassociateIpAddress
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  The UUID of the public IP address to disassociate.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=disassociateIpAddress\
+&id=f1e2d3c4-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createPortForwardingRule
+
+Creates a port forwarding rule on a public IP address.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createPortForwardingRule
+```
+
+### Request parameters
+
+<ParamField query="ipaddressid" type="uuid" required>
+  The UUID of the public IP address on which to create the rule.
+</ParamField>
+
+<ParamField query="privateport" type="integer" required>
+  The private port to forward traffic to on the instance.
+</ParamField>
+
+<ParamField query="publicport" type="integer" required>
+  The public port on the IP address that receives traffic.
+</ParamField>
+
+<ParamField query="protocol" type="string" required>
+  The protocol: `TCP` or `UDP`.
+</ParamField>
+
+<ParamField query="virtualmachineid" type="uuid" required>
+  The UUID of the instance to forward traffic to.
+</ParamField>
+
+<ParamField query="privateendport" type="integer">
+  The end of the private port range. Defaults to `privateport`.
+</ParamField>
+
+<ParamField query="publicendport" type="integer">
+  The end of the public port range. Defaults to `publicport`.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createPortForwardingRule\
+&ipaddressid=f1e2d3c4-...\
+&privateport=22\
+&publicport=2222\
+&protocol=TCP\
+&virtualmachineid=b2e4f1a0-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createFirewallRule
+
+Creates an ingress or egress firewall rule on a public IP or network.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createFirewallRule
+```
+
+### Request parameters
+
+<ParamField query="ipaddressid" type="uuid" required>
+  The UUID of the public IP address.
+</ParamField>
+
+<ParamField query="protocol" type="string" required>
+  Protocol: `TCP`, `UDP`, `ICMP`, or `ALL`.
+</ParamField>
+
+<ParamField query="cidrlist" type="string">
+  Comma-separated list of CIDRs to allow traffic from.
+</ParamField>
+
+<ParamField query="startport" type="integer">
+  Start of the port range (for TCP/UDP).
+</ParamField>
+
+<ParamField query="endport" type="integer">
+  End of the port range (for TCP/UDP). Defaults to `startport`.
+</ParamField>
+
+<ParamField query="icmptype" type="integer">
+  ICMP type (for ICMP protocol).
+</ParamField>
+
+<ParamField query="icmpcode" type="integer">
+  ICMP code (for ICMP protocol).
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createFirewallRule\
+&ipaddressid=f1e2d3c4-...\
+&protocol=TCP\
+&cidrlist=0.0.0.0/0\
+&startport=443\
+&endport=443\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createLoadBalancerRule
+
+Creates a load balancer rule on a public IP address.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createLoadBalancerRule
+```
+
+### Request parameters
+
+<ParamField query="publicipid" type="uuid" required>
+  The UUID of the public IP address.
+</ParamField>
+
+<ParamField query="name" type="string" required>
+  Name for the load balancer rule.
+</ParamField>
+
+<ParamField query="publicport" type="integer" required>
+  The public port on which the load balancer listens.
+</ParamField>
+
+<ParamField query="privateport" type="integer" required>
+  The private port to which traffic is forwarded on the instances.
+</ParamField>
+
+<ParamField query="algorithm" type="string" required>
+  Load balancing algorithm: `roundrobin`, `leastconn`, or `source`.
+</ParamField>
+
+<ParamField query="protocol" type="string">
+  Protocol: `TCP` or `UDP`. Defaults to `TCP`.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  Zone ID for the load balancer.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createLoadBalancerRule\
+&publicipid=f1e2d3c4-...\
+&name=web-lb\
+&publicport=80\
+&privateport=8080\
+&algorithm=roundrobin\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## createVpnConnection
+
+Creates a site-to-site VPN connection between a VPC and a customer gateway.
+
+**Async:** Yes
+
+```
+GET /client/api?command=createVpnConnection
+```
+
+### Request parameters
+
+<ParamField query="s2svpngatewayid" type="uuid" required>
+  The UUID of the site-to-site VPN gateway.
+</ParamField>
+
+<ParamField query="s2scustomergatewayid" type="uuid" required>
+  The UUID of the customer gateway.
+</ParamField>
+
+<ParamField query="passive" type="boolean" default="false">
+  If `true`, this side of the connection is passive (does not initiate IKE).
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=createVpnConnection\
+&s2svpngatewayid=a1b2c3d4-...\
+&s2scustomergatewayid=e5f6a7b8-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listPublicIpAddresses
+
+Lists public IP addresses.
+
+```
+GET /client/api?command=listPublicIpAddresses
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by specific IP address UUID.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  Filter by zone.
+</ParamField>
+
+<ParamField query="vpcid" type="uuid">
+  Filter IPs associated with a specific VPC.
+</ParamField>
+
+<ParamField query="networkid" type="uuid">
+  Filter IPs associated with a specific network.
+</ParamField>
+
+<ParamField query="account" type="string">
+  Filter by account.
+</ParamField>
+
+<ParamField query="issourcenat" type="boolean">
+  If `true`, return only source NAT addresses.
+</ParamField>
+
+<ParamField query="isstaticnat" type="boolean">
+  If `true`, return only static NAT addresses.
+</ParamField>
+
+<ParamField query="allocatedonly" type="boolean" default="true">
+  If `true`, return only allocated addresses.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination.
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listPublicIpAddresses\
+&zoneid=a2f3de84-...\
+&allocatedonly=true\
+&apiKey=your-api-key\
+&signature=your-signature"
+```

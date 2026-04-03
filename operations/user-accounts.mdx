@@ -1,0 +1,366 @@
+---
+title: "User Accounts and Access Control"
+description: "Manage multi-tenancy in CloudStack with domains, accounts, projects, roles, and resource limits."
+---
+
+CloudStack provides a layered multi-tenancy model built on domains, accounts, users, and roles. Every resource—VM, network, volume, IP—is owned by an account and subject to domain-level and account-level limits.
+
+## Domain hierarchy
+
+Domains organize accounts into a tree rooted at the `ROOT` domain. Sub-domains inherit configuration from their parent and can have their own administrators.
+
+```
+ROOT
+├── engineering
+│   ├── frontend
+│   └── backend
+└── operations
+    └── infra
+```
+
+- Every account belongs to exactly one domain.
+- Domain admins can manage all accounts and resources within their domain and sub-domains.
+- Resource limits can be set at both the domain and account level; the effective limit for an account is the minimum of the two.
+
+### Creating sub-domains
+
+```bash
+# API: createDomain
+name=engineering
+parentdomainid=<root-domain-uuid>   # omit for a child of ROOT
+networkdomain=engineering.example.com
+```
+
+## Account types
+
+| Type value | Role | Description |
+|---|---|---|
+| `1` | Root Admin | Full access to all resources in the system. Only root admins can manage infrastructure (zones, pods, clusters, hosts). |
+| `2` | Domain Admin | Full access to all accounts and resources within their domain and sub-domains. Cannot manage infrastructure. |
+| `0` | User | Access to resources owned by their own account only. |
+
+## Creating accounts and users
+
+The `createAccount` API command creates both an account and its initial user in a single call.
+
+```bash
+# API: createAccount — create a domain admin account
+username=alice
+firstname=Alice
+lastname=Smith
+email=alice@example.com
+password=<hashed-password>
+accounttype=2          # domain admin
+domainid=<domain-uuid>
+account=alice-admin    # account name (defaults to username if omitted)
+```
+
+```bash
+# API: createAccount — create a regular user account
+username=bob
+firstname=Bob
+lastname=Jones
+email=bob@example.com
+password=<hashed-password>
+accounttype=0          # user
+domainid=<domain-uuid>
+```
+
+<Note>
+  Passwords are hashed with SHA256+salt by default. To use a different hashing algorithm, implement a custom authentication adapter. See the CloudStack developer documentation for details.
+</Note>
+
+### Adding additional users to an account
+
+```bash
+# API: createUser
+username=charlie
+firstname=Charlie
+lastname=Brown
+email=charlie@example.com
+password=<password>
+accountid=<account-uuid>
+domainid=<domain-uuid>
+```
+
+### Account lifecycle
+
+```bash
+# Disable an account (VMs continue running; no new resources)
+disableAccount id=<account-uuid> lock=false
+
+# Lock an account (VMs continue running; login disabled)
+disableAccount id=<account-uuid> lock=true
+
+# Re-enable
+enableAccount id=<account-uuid>
+
+# Delete (removes account and all its resources)
+deleteAccount id=<account-uuid>
+```
+
+## Resource limits
+
+Resource limits cap the number or size of resources an account or domain can create. Administrators set limits; CloudStack enforces them at resource allocation time.
+
+### Setting account-level limits
+
+```bash
+# API: updateResourceLimit
+account=<account-name>
+domainid=<domain-uuid>
+resourcetype=0     # see resource type table
+max=10
+```
+
+### Setting domain-level limits
+
+```bash
+updateResourceLimit \
+  domainid=<domain-uuid> \
+  resourcetype=8 \
+  max=100
+```
+
+### Resource type reference
+
+| Type | Resource |
+|---|---|
+| `0` | Virtual machine instances |
+| `1` | Public IP addresses |
+| `2` | Disk volumes |
+| `3` | Snapshots |
+| `4` | Templates |
+| `5` | Projects |
+| `6` | Networks |
+| `7` | VPCs |
+| `8` | CPU cores |
+| `9` | Memory (MB) |
+| `10` | Primary storage (GB) |
+| `11` | Secondary storage (GB) |
+
+<Tip>
+  Set `max=-1` to remove a limit entirely (unlimited for the account or domain). The effective limit is always the minimum of the account limit, the domain limit, and any parent domain limits.
+</Tip>
+
+## Project management
+
+Projects allow multiple accounts to share resources. VMs, networks, and volumes owned by a project are accessible to all project members, regardless of which account created them.
+
+### Creating a project
+
+```bash
+# API: createProject
+name=platform-team
+displaytext="Platform engineering team"
+account=alice-admin
+domainid=<domain-uuid>
+```
+
+### Adding members
+
+Project invitations are sent to account owners. The invited account must accept before gaining access:
+
+```bash
+# API: addAccountToProject — directly add without invitation
+projectid=<project-uuid>
+account=bob
+email=bob@example.com
+```
+
+```bash
+# Alternatively, send an invitation
+createProjectInvitation \
+  projectid=<project-uuid> \
+  account=bob
+
+# Recipient accepts
+updateProjectInvitation id=<invitation-uuid> accept=true
+```
+
+### Deploying resources into a project
+
+Pass `projectid` when creating any resource to assign it to the project:
+
+```bash
+deployVirtualMachine \
+  ... \
+  projectid=<project-uuid>
+```
+
+### Project lifecycle
+
+```bash
+# Suspend a project (resources preserved, no new deployments)
+suspendProject id=<project-uuid>
+
+# Reactivate
+activateProject id=<project-uuid>
+
+# Delete (removes project and all its resources)
+deleteProject id=<project-uuid>
+```
+
+## Role-based access control (RBAC)
+
+CloudStack RBAC lets administrators define exactly which API commands each role can execute. Built-in roles provide a starting point; custom roles allow fine-grained control.
+
+### Built-in roles
+
+| Role | Description |
+|---|---|
+| `Root Admin` | Access to all API commands |
+| `Domain Admin` | Access to domain-level management commands |
+| `Resource Admin` | Access to resource management within an account |
+| `User` | Access to user-level commands only |
+
+### Creating a custom role
+
+```bash
+# API: createRole
+name=network-admin
+roletype=User       # base type: Admin, DomainAdmin, ResourceAdmin, User
+description="Can manage networks but not VMs"
+```
+
+### Adding permissions to a role
+
+Permissions are allow/deny rules matched against API command names. Rules are evaluated in order; the first match wins.
+
+```bash
+# API: createRolePermission
+roleid=<role-uuid>
+rule=createNetwork
+permission=ALLOW
+
+# Wildcard: allow all network-related commands
+createRolePermission \
+  roleid=<role-uuid> \
+  rule=*Network* \
+  permission=ALLOW
+
+# Deny a specific command
+createRolePermission \
+  roleid=<role-uuid> \
+  rule=deleteNetwork \
+  permission=DENY
+```
+
+### Importing a role from another role
+
+```bash
+# API: importRole — copy permissions from an existing role
+name=network-admin-v2
+roletype=User
+rules[0].rule=*Network*&rules[0].permission=ALLOW
+forced=true    # overwrite if role with this name exists
+```
+
+### Assigning a role to an account
+
+Pass `roleid` when creating an account to use a custom role:
+
+```bash
+createAccount \
+  ... \
+  accounttype=0 \
+  roleid=<custom-role-uuid>
+```
+
+## API keys
+
+Every CloudStack user can generate API and secret key pairs for programmatic access. Keys authenticate requests to the API without requiring a session login.
+
+### Generating API keys
+
+<Tabs>
+  <Tab title="UI">
+    Navigate to **Account > My Account > API Credentials** and click **Generate Keys**. Copy the API key and secret key immediately—the secret key cannot be retrieved again.
+  </Tab>
+  <Tab title="API">
+    ```bash
+    # API: registerUserKeys
+    id=<user-uuid>
+    ```
+
+    The response contains `apikey` and `secretkey`. Store the secret key securely.
+  </Tab>
+</Tabs>
+
+### Using API keys
+
+Requests must be signed with the secret key using HMAC-SHA1. The signature is computed over the sorted, URL-encoded query parameters.
+
+```python
+import hmac
+import hashlib
+import base64
+import urllib.parse
+
+def sign_request(params: dict, secret_key: str) -> str:
+    # Sort parameters, lowercase keys
+    sorted_params = sorted(
+        (k.lower(), v) for k, v in params.items()
+    )
+    query = "&".join(f"{k}={urllib.parse.quote(v, safe='')}"
+                     for k, v in sorted_params)
+    sig = hmac.new(
+        secret_key.encode("utf-8"),
+        query.lower().encode("utf-8"),
+        hashlib.sha1
+    ).digest()
+    return base64.b64encode(sig).decode("utf-8")
+```
+
+<Note>
+  API key pairs are per-user, not per-account. Each user in an account can have their own independent key pair. Regenerating a key pair invalidates the previous pair immediately.
+</Note>
+
+## Authentication integrations
+
+CloudStack supports pluggable authentication to integrate with external identity providers.
+
+<AccordionGroup>
+  <Accordion title="LDAP / Active Directory">
+    Configure LDAP at the domain level to authenticate CloudStack users against an existing directory:
+
+    ```bash
+    # API: addLdapConfiguration
+    hostname=ldap.example.com
+    port=389
+    domainid=<domain-uuid>
+
+    # Link LDAP group to a CloudStack domain
+    linkDomainToLdap \
+      domainid=<domain-uuid> \
+      type=GROUP \
+      name=cloudstack-users \
+      accounttype=0
+    ```
+
+    Users in the linked LDAP group can log in with their LDAP credentials. CloudStack creates shadow accounts on first login.
+  </Accordion>
+  <Accordion title="SAML 2.0">
+    SAML 2.0 enables single sign-on with identity providers such as Okta, OneLogin, and Azure AD. Configure the SAML provider in `global settings`:
+
+    | Setting | Description |
+    |---|---|
+    | `saml2.enabled` | Enable SAML authentication |
+    | `saml2.idp.metadata.url` | URL to fetch IdP SAML metadata |
+    | `saml2.sp.id` | CloudStack service provider entity ID |
+    | `saml2.redirect.url` | Default redirect after successful SAML login |
+
+    Users must also be authorized to use SAML by calling `authorizeSamlSso`:
+    ```bash
+    authorizeSamlSso \
+      userid=<user-uuid> \
+      enable=true \
+      entityid=<idp-entity-id>
+    ```
+  </Accordion>
+  <Accordion title="OAuth2">
+    CloudStack supports OAuth2 login via configured providers (GitHub, Google, and custom). Register the provider in global settings with the client ID and secret, then enable OAuth2 login in the CloudStack UI configuration.
+
+    OAuth2 login creates or links a CloudStack user account to the external identity on first login based on the email address returned by the provider.
+  </Accordion>
+</AccordionGroup>

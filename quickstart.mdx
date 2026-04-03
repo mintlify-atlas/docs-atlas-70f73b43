@@ -1,80 +1,269 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quick Start"
+description: "Get Apache CloudStack running in a local development environment in under an hour."
 ---
 
-## Get started in three steps
+This guide walks you through setting up a CloudStack developer environment using the built-in simulator hypervisor. No physical hypervisor hosts are required — the simulator lets you exercise the full CloudStack API and UI against virtual resources.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  The simulator is for development and testing only. For a production deployment, follow the [Installation guide](/installation).
+</Note>
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+You need the following tools installed before you begin:
 
-### Step 2: Deploy your changes
+| Tool | Required version | Notes |
+|---|---|---|
+| Java (JDK) | 17 | `java-17-openjdk` and `java-17-openjdk-devel` |
+| Maven | 3.9.10 | See setup instructions below |
+| MySQL | 8.0+ | Must be running and accessible |
+| Node.js | 16.x | Required to build and run the UI |
+| Git | Any recent version | — |
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+## Setup
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Steps>
+  <Step title="Install system dependencies">
+    Install Java, MySQL, and build tools.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    <Tabs>
+      <Tab title="RHEL / CentOS">
+        ```bash
+        yum -y install git java-17-openjdk java-17-openjdk-devel \
+          mysql mysql-server mkisofs gcc python MySQL-python \
+          openssh-clients wget
+        ```
+      </Tab>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        apt-get update
+        apt-get -y install git openjdk-17-jdk openjdk-17-jre \
+          mysql-server genisoimage gcc python3 \
+          python3-mysqldb wget
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
 
-### Step 3: Go live
+  <Step title="Install Maven 3.9.10">
+    CloudStack requires Maven 3.9.x. Install it manually to ensure the correct version.
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```bash
+    wget https://dlcdn.apache.org/maven/maven-3/3.9.10/binaries/apache-maven-3.9.10-bin.tar.gz
+    sudo tar -zxvf apache-maven-3.9.10-bin.tar.gz -C /usr/local
+    sudo ln -s /usr/local/apache-maven-3.9.10 /usr/local/maven
+    echo 'export M2_HOME=/usr/local/maven' >> ~/.bashrc
+    echo 'export PATH=/usr/local/maven/bin:${PATH}' >> ~/.bashrc
+    source ~/.bashrc
+    ```
+
+    Verify the installation:
+
+    ```bash
+    mvn --version
+    ```
+  </Step>
+
+  <Step title="Install Node.js 16">
+    The CloudStack UI requires Node.js 16 and the Vue CLI.
+
+    <Tabs>
+      <Tab title="RHEL / CentOS">
+        ```bash
+        curl -sL https://rpm.nodesource.com/setup_16.x | sudo -E bash -
+        sudo yum install nodejs
+        sudo npm install -g @vue/cli npm-check-updates
+        ```
+      </Tab>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        curl -sL https://deb.nodesource.com/setup_16.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+        sudo npm install -g @vue/cli npm-check-updates
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Start MySQL and secure the installation">
+    Start the MySQL service and run the secure installation wizard.
+
+    <Tabs>
+      <Tab title="RHEL / CentOS">
+        ```bash
+        service mysqld start
+        mysql_secure_installation
+        ```
+      </Tab>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        service mysql start
+        mysql_secure_installation
+        ```
+      </Tab>
+    </Tabs>
+
+    <Tip>
+      When prompted during `mysql_secure_installation`, you can press Enter to accept the defaults for a local development setup. Make note of the root password you set — you will need it when deploying the database schema.
+    </Tip>
+  </Step>
+
+  <Step title="Clone the repository">
+    Clone from the official Apache repository or the GitHub mirror.
+
+    <CodeGroup>
+
+    ```bash Apache (official)
+    git clone https://gitbox.apache.org/repos/asf/cloudstack.git
+    cd cloudstack
+    ```
+
+    ```bash GitHub (mirror)
+    git clone https://github.com/apache/cloudstack.git
+    cd cloudstack
+    ```
+
+    </CodeGroup>
+
+    To check out a specific release branch (for example 4.19):
+
+    ```bash
+    git fetch origin
+    git checkout -b 4.19 origin/4.19
+    ```
+  </Step>
+
+  <Step title="Build CloudStack">
+    Build the entire project with the `systemvm` and `developer` Maven profiles. This compiles all modules and produces the artifacts needed to run the management server.
+
+    ```bash
+    mvn clean install -P systemvm,developer
+    ```
+
+    <Note>
+      The first build downloads all Maven dependencies and can take 10–20 minutes depending on your network connection. Subsequent builds are significantly faster.
+    </Note>
+
+    To include non-redistributable plugins (for VMware or certain storage plugins), first install the required libraries and then add the `noredist` flag:
+
+    ```bash
+    cd deps && ./install-non-oss.sh && cd ..
+    mvn clean install -P systemvm,developer -Dnoredist
+    ```
+  </Step>
+
+  <Step title="Deploy the database schema">
+    Create the CloudStack database schema and seed the initial data. This drops and recreates the database, so run it on a fresh MySQL instance or when you want to reset your environment.
+
+    ```bash
+    mvn -P developer -pl developer -Ddeploydb
+    ```
+
+    If you want to use the simulator hypervisor (recommended for development), also deploy the simulator schema:
+
+    ```bash
+    mvn -P developer -pl developer -Ddeploydb-simulator
+    ```
+  </Step>
+
+  <Step title="Configure the management server JVM (optional)">
+    Export `MAVEN_OPTS` to enable remote debugging on port 8787. This is useful when you want to attach a debugger to the running management server.
+
+    ```bash
+    export MAVEN_OPTS="-Xmx1024m -XX:MaxMetaspaceSize=500m \
+      -Xdebug -Xrunjdwp:transport=dt_socket,address=8787,server=y,suspend=n"
+    ```
+  </Step>
+
+  <Step title="Start the management server">
+    Start the embedded Jetty server, which serves both the CloudStack API and the management UI.
+
+    ```bash
+    mvn -pl :cloud-client-ui jetty:run
+    ```
+
+    The management server is ready when you see output indicating Jetty has started. The server listens on port 8080 by default.
+  </Step>
+
+  <Step title="Access the management UI">
+    Open `http://localhost:8080` in your browser. Log in with the default credentials:
+
+    | Field | Value |
+    |---|---|
+    | Username | `admin` |
+    | Password | `password` |
+    | Domain | Leave blank (defaults to ROOT) |
+
+    <Warning>
+      Change the default admin password immediately in any environment accessible to others. Go to **Accounts** → **admin** → **Change Password** after your first login.
+    </Warning>
+  </Step>
+
+  <Step title="Build and run the standalone UI (optional)">
+    For UI development, you can run the Vue.js frontend separately from the management server. This gives you hot-reload and faster iteration on UI changes.
+
+    Navigate to the `ui` directory inside the cloudstack source tree:
+
+    ```bash
+    cd ui
+    ```
+
+    Install dependencies and build:
+
+    ```bash
+    npm install
+    npm run build
+    ```
+
+    Create a local environment file to point the UI at your running management server:
+
+    ```bash
+    echo "CS_URL=http://localhost:8080" > .env.local
+    ```
+
+    Start the development server:
+
+    ```bash
+    npm start
+    ```
+
+    The UI is available at `http://localhost:5050`.
+  </Step>
+</Steps>
+
+## Verify the setup
+
+After the management server starts, you can verify the API is responding:
+
+```bash
+curl "http://localhost:8080/client/api?command=listUsers&response=json&username=admin" \
+  --user admin:password
+```
+
+A successful response returns a JSON object listing the admin user.
+
+You can also try the public demo environment, which runs CloudStack against the simulator hypervisor:
+
+```
+https://qa.cloudstack.cloud/simulator/
+```
+
+Credentials: `admin` / `password`
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand zones, pods, clusters, and how CloudStack organizes physical infrastructure.
+  </Card>
+  <Card title="Production installation" icon="wrench" href="/installation">
+    Deploy CloudStack on Ubuntu or RHEL/CentOS for a real production environment.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/overview">
+    Explore the CloudStack API to automate provisioning and management.
+  </Card>
+  <Card title="Operations guide" icon="sliders" href="/operations/zones-pods-clusters">
+    Configure zones, pods, clusters, and add hypervisor hosts.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

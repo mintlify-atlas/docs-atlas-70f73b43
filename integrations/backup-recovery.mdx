@@ -1,0 +1,214 @@
+---
+title: "Backup and Recovery"
+description: "Configure CloudStack backup and recovery with support for Veeam, NetWorker, and NAS-based backup providers."
+---
+
+CloudStack includes a backup and recovery framework that lets you define backup policies, assign them to virtual machines, and trigger or schedule backups through the CloudStack API. The framework is provider-agnostic: backup operations are delegated to a registered backup provider plugin that handles the actual data movement and storage.
+
+## Framework overview
+
+The backup framework has three core abstractions:
+
+- **Backup provider**: A plugin that implements the `BackupProvider` interface and communicates with an external backup system or storage target. Each zone can have at most one active backup provider.
+- **Backup offering**: A named policy that maps to a backup job or protection policy defined in the external backup system. Offerings are created by administrators and can be assigned to VMs.
+- **Backup**: A point-in-time copy of a VM created either on demand or by a schedule. Backups are tracked in the CloudStack database and can be listed, restored, or deleted through the API.
+
+Enable the backup framework with the global configuration key `backup.framework.enabled`. This key must be set to `true` before any backup operations are available.
+
+## Supported backup providers
+
+<CardGroup cols={2}>
+  <Card title="Veeam" icon="server">
+    Integrates with Veeam Backup & Recovery via its REST API. Supports VMware vSphere environments. Backups map to Veeam backup jobs. The provider communicates with the Veeam server at a configurable URL and can use PowerShell commands to query server version automatically.
+  </Card>
+  <Card title="Dell EMC NetWorker" icon="database">
+    Integrates with Dell EMC NetWorker via its REST API (`/nwrestapi/v3`). Supports multiple hypervisors. Backups map to NetWorker protection policies. The provider uses an identifier tag (`-CSBKP-`) to associate NetWorker backups with CloudStack VMs.
+  </Card>
+  <Card title="NAS" icon="hard-drive">
+    File-level backup provider that mounts a NAS share on the hypervisor host and copies VM disk images. Uses VM snapshots as the backup source. Suited for environments without an external enterprise backup product.
+  </Card>
+  <Card title="Dummy" icon="flask">
+    Reference implementation for development and testing. Does not perform real backup operations. Use to verify framework configuration without connecting to an external backup system.
+  </Card>
+</CardGroup>
+
+## Configuring a backup provider
+
+Each provider is configured through zone-scoped CloudStack global settings. Set these in the CloudStack UI under **Global Settings**, filtering by the provider key prefix, or via the `updateConfiguration` API.
+
+<Tabs>
+  <Tab title="Veeam">
+    | Configuration key | Default | Description |
+    |---|---|---|
+    | `backup.plugin.veeam.url` | `https://localhost:9398/api/` | Veeam Backup & Recovery REST API URL |
+    | `backup.plugin.veeam.version` | `0` | Veeam server version (0 = auto-detect via PowerShell) |
+    | `backup.plugin.veeam.username` | `administrator` | Veeam API username |
+    | `backup.plugin.veeam.password` | _(empty)_ | Veeam API password (stored in Secure category) |
+    | `backup.plugin.veeam.validate.ssl` | `false` | Validate TLS certificate when connecting to the Veeam API |
+    | `backup.plugin.veeam.request.timeout` | `300` | API request timeout in seconds |
+    | `backup.plugin.veeam.restore.timeout` | `600` | Restore operation timeout in seconds |
+    | `backup.plugin.veeam.task.poll.interval` | `5` | Seconds between polls for Veeam task status |
+    | `backup.plugin.veeam.task.poll.max.retry` | `120` | Maximum task status poll retries |
+
+    <Note>
+    The Veeam provider requires that the VMs being backed up reside on a VMware vSphere cluster registered with the same CloudStack zone. The provider looks up the Vmware Datacenter zone mapping to identify the correct vCenter.
+    </Note>
+  </Tab>
+  <Tab title="NetWorker">
+    | Configuration key | Default | Description |
+    |---|---|---|
+    | `backup.plugin.networker.url` | `https://localhost:9090/nwrestapi/v3` | NetWorker REST API URL |
+    | `backup.plugin.networker.username` | `administrator` | NetWorker API username |
+    | `backup.plugin.networker.password` | `password` | NetWorker API password (stored in Secure category) |
+    | `backup.plugin.networker.pool` | `Default` | NetWorker media pool used for backup storage |
+    | `backup.plugin.networker.validate.ssl` | `false` | Validate TLS certificate when connecting to the NetWorker API |
+    | `backup.plugin.networker.request.timeout` | `300` | API request timeout in seconds |
+    | `backup.plugin.networker.client.verbosity` | `false` | Enable verbose logs on the hypervisor host |
+
+    NetWorker backups are identified by appending the tag `-CSBKP-` to backup identifiers, making it possible to correlate NetWorker protection policy runs with CloudStack VM records.
+  </Tab>
+  <Tab title="NAS">
+    The NAS provider uses VM snapshots and mounts a registered backup repository (NFS or similar share) on the hypervisor host to copy disk images.
+
+    | Configuration key | Default | Description |
+    |---|---|---|
+    | `nas.backup.restore.mount.timeout` | `30` | Timeout in seconds for mounting the backup repository during restore |
+
+    NAS backup repositories are registered separately using the backup repository API (`addBackupRepository`). Each repository is associated with a zone and a storage URL that the hypervisor host can mount.
+  </Tab>
+</Tabs>
+
+## Creating backup offerings
+
+Backup offerings are administrator-created objects that reference a protection policy or backup job in the external backup system. End users cannot create offerings; they assign existing offerings to their VMs.
+
+```bash
+cloudstack-api createBackupOffering \
+  name="daily-retention-30" \
+  description="Daily backup, 30-day retention" \
+  zoneid="<zone-uuid>" \
+  externalid="<policy-name-or-id-in-backup-system>"
+```
+
+The `externalid` field maps to a named entity in the configured backup provider:
+- **Veeam**: the name of a Veeam backup job
+- **NetWorker**: the name of a NetWorker protection policy
+- **NAS**: an identifier used internally by the NAS provider
+
+List available offerings imported from the external system with:
+
+```bash
+cloudstack-api importBackupOffering zoneid="<zone-uuid>"
+```
+
+This triggers the provider to query the external system and return a list of policies that can be registered as CloudStack backup offerings.
+
+## Assigning backup offerings to VMs
+
+Once an offering exists, a user (or admin) assigns it to a VM. A VM can have at most one backup offering assigned at a time.
+
+```bash
+cloudstack-api assignVirtualMachineToBackupOffering \
+  virtualmachineid="<vm-uuid>" \
+  backupofferingid="<offering-uuid>"
+```
+
+To remove an assignment:
+
+```bash
+cloudstack-api removeVirtualMachineFromBackupOffering \
+  virtualmachineid="<vm-uuid>"
+```
+
+## Backup policies and scheduling
+
+After assigning a backup offering, configure a backup schedule to automate periodic backups.
+
+```bash
+cloudstack-api createBackupSchedule \
+  virtualmachineid="<vm-uuid>" \
+  intervaltype="DAILY" \
+  schedule="00:00:00" \
+  timezone="UTC"
+```
+
+Supported interval types: `HOURLY`, `DAILY`, `WEEKLY`, `MONTHLY`.
+
+Update or delete a schedule:
+
+```bash
+cloudstack-api updateBackupSchedule \
+  virtualmachineid="<vm-uuid>" \
+  intervaltype="WEEKLY" \
+  schedule="00:00:00" \
+  timezone="UTC" \
+  dayofweek=1
+
+cloudstack-api deleteBackupSchedule virtualmachineid="<vm-uuid>"
+```
+
+### On-demand backups
+
+Trigger an immediate backup at any time:
+
+```bash
+cloudstack-api createBackup virtualmachineid="<vm-uuid>"
+```
+
+## Listing and managing backups
+
+```bash
+# List all backups for a VM
+cloudstack-api listBackups virtualmachineid="<vm-uuid>"
+
+# Delete a specific backup
+cloudstack-api deleteBackup id="<backup-uuid>"
+```
+
+## Restoring from backup
+
+CloudStack supports two restore modes:
+
+<AccordionGroup>
+  <Accordion title="Full VM restore">
+    Restores the complete VM from a backup point. The VM must exist in CloudStack (it is not recreated from scratch; the existing VM's disks are overwritten).
+
+    ```bash
+    cloudstack-api restoreBackup id="<backup-uuid>"
+    ```
+  </Accordion>
+  <Accordion title="Volume restore and attach">
+    Restores a specific volume from a backup and attaches it to a (potentially different) VM. This allows selective recovery of individual disks without restoring the entire VM.
+
+    ```bash
+    cloudstack-api restoreVolumeFromBackupAndAttachToVM \
+      backupid="<backup-uuid>" \
+      volumeid="<volume-uuid>" \
+      virtualmachineid="<target-vm-uuid>"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+Full VM restore overwrites the current state of the VM's volumes. Ensure the target VM is stopped before initiating a restore to avoid data corruption.
+</Warning>
+
+## API reference summary
+
+| Command | Description |
+|---|---|
+| `createBackupOffering` | Create a backup offering from an external policy |
+| `listBackupOfferings` | List backup offerings in a zone |
+| `deleteBackupOffering` | Remove a backup offering |
+| `importBackupOffering` | List policies available in the external backup system |
+| `assignVirtualMachineToBackupOffering` | Assign a backup offering to a VM |
+| `removeVirtualMachineFromBackupOffering` | Remove a VM's backup offering assignment |
+| `createBackup` | Trigger an on-demand backup |
+| `listBackups` | List backups for a VM or zone |
+| `deleteBackup` | Delete a backup |
+| `createBackupSchedule` | Create an automated backup schedule for a VM |
+| `listBackupSchedule` | List the backup schedule for a VM |
+| `updateBackupSchedule` | Update an existing backup schedule |
+| `deleteBackupSchedule` | Remove a backup schedule |
+| `restoreBackup` | Restore a VM from a backup |
+| `restoreVolumeFromBackupAndAttachToVM` | Restore a volume from backup and attach it to a VM |

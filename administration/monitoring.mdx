@@ -1,0 +1,339 @@
+---
+title: "Monitoring and Observability"
+description: "Monitor CloudStack with built-in metrics, alerts, event logs, and Prometheus integration."
+---
+
+CloudStack exposes observability data through several surfaces: a metrics plugin with dedicated list APIs, an alert system, an event log, and a usage server for billing-grade resource consumption records.
+
+## Metrics plugin
+
+The `metrics` plugin (`plugins/metrics/`) extends the standard CloudStack list APIs with enriched resource statistics. It is enabled by default and requires no additional configuration.
+
+### Infrastructure summary
+
+`listInfrastructure` returns a count of all infrastructure objects managed by the CloudStack installation:
+
+| Field | Description |
+|-------|-------------|
+| `zones` | Number of zones |
+| `pods` | Number of pods |
+| `clusters` | Number of clusters |
+| `hosts` | Number of hypervisor hosts |
+| `storagepools` | Number of primary storage pools |
+| `imagestores` | Number of image stores |
+| `systemvms` | Number of system VMs (console proxy, secondary storage) |
+| `routers` | Number of virtual routers |
+| `managementservers` | Number of management server nodes |
+| `alerts` | Current open alert count |
+| `cpusockets` | Total physical CPU sockets across all hosts |
+
+```bash
+cloudstack-api listInfrastructure
+```
+
+### Host metrics
+
+`listHostsMetrics` extends `listHosts` with the following additional fields per host:
+
+| Field | Description |
+|-------|-------------|
+| `instances` | Running / total instances (e.g., `12 / 20`) |
+| `systeminstances` | Running / total system VM instances |
+| `cputotalghz` | Total CPU capacity in GHz |
+| `cpuusedghz` | CPU currently in use in GHz |
+| `cpuallocatedghz` | CPU allocated to VMs in GHz |
+| `memorytotalgb` | Total memory in GB |
+| `memoryusedgb` | Memory in use in GB |
+| `memoryallocatedgb` | Memory allocated to VMs in GB |
+| `networkread` | Cumulative network read in GB |
+| `networkwrite` | Cumulative network write in GB |
+| `cputhreshold` | `true` if CPU usage exceeds the notification threshold |
+| `cpudisablethreshold` | `true` if CPU usage exceeds the disable threshold |
+| `memorythreshold` | `true` if memory usage exceeds the notification threshold |
+| `powerstate` | Out-of-band management power state |
+
+```bash
+cloudstack-api listHostsMetrics clusterid=<cluster-uuid>
+```
+
+<Note>
+  The `allow.list.metrics.computation` global setting (default `true`) controls whether zone and cluster metrics APIs perform live computation. Set it to `false` in very large environments to avoid the overhead — metric fields will be absent from the response.
+</Note>
+
+### Cluster and zone metrics
+
+<Tabs>
+  <Tab title="Cluster metrics">
+    ```bash
+    cloudstack-api listClustersMetrics zoneid=<zone-uuid>
+    ```
+    Returns aggregate CPU and memory totals, allocations, and usages across all hosts in each cluster, plus threshold breach indicators.
+  </Tab>
+  <Tab title="Zone metrics">
+    ```bash
+    cloudstack-api listZonesMetrics
+    ```
+    Returns zone-level aggregates including total capacity, allocated resources, and virtual router count.
+  </Tab>
+  <Tab title="Storage pool metrics">
+    ```bash
+    cloudstack-api listStoragePoolsMetrics zoneid=<zone-uuid>
+    ```
+    Returns per-pool totals for disk capacity, allocated, and used space with threshold breach indicators.
+  </Tab>
+</Tabs>
+
+### Management server metrics
+
+`listMgmtsMetrics` returns per-node JVM and system statistics, available only to `Admin` role users:
+
+| Field | Description |
+|-------|-------------|
+| `availableprocessors` | JVM-visible CPU count |
+| `agentcount` | Number of hypervisor agents managed by this node |
+| `sessions` | Active client sessions on this node |
+| `heapmemoryused` | JVM heap used (bytes) |
+| `heapmemorytotal` | JVM heap total (bytes) |
+| `threadsblockedcount` | Blocked threads |
+| `threadsrunnablecount` | Runnable threads |
+| `threadswaitingcount` | Waiting threads |
+| `threadstotalcount` | All threads |
+| `systemmemorytotal` | Host OS total memory |
+| `systemmemoryfree` | Host OS free memory |
+| `systemloadaverages` | 1/5/15-minute load averages |
+| `systemcycleusage` | User, system, and idle CPU cycles |
+| `cpuload` | Formatted CPU load percentage |
+| `dbislocal` | Whether MySQL is running on the same host |
+| `usageislocal` | Whether the usage server runs on the same host |
+| `loginfo` | Log file names and disk usage |
+| `collectiontime` | Timestamp when these statistics were collected |
+
+```bash
+cloudstack-api listMgmtsMetrics
+```
+
+### Database metrics
+
+`listDbMetrics` queries the MySQL instance(s) for health information (available since 4.17.0, `Admin` role only):
+
+| Field | Description |
+|-------|-------------|
+| `hostname` | Database host name |
+| `replicas` | Replication replica states |
+| `connections` | Current connection count |
+| `uptime` | Database uptime in seconds |
+| `tlsversions` | TLS versions accepted by the database |
+| `version` | MySQL version string |
+| `queries` | Total queries executed |
+| `dbloadaverages` | Last measured load averages on the database host |
+| `collectiontime` | Timestamp of collection |
+
+```bash
+cloudstack-api listDbMetrics
+```
+
+### VM and volume usage history
+
+The metrics plugin provides time-series usage history APIs for VMs, system VMs, and volumes:
+
+```bash
+# VM CPU/memory stats over a time window
+cloudstack-api listVMsUsageHistory \
+  startdate=2026-01-01 enddate=2026-01-31
+
+# System VM stats
+cloudstack-api listSystemVMsUsageHistory \
+  startdate=2026-01-01 enddate=2026-01-31
+
+# Volume read/write stats
+cloudstack-api listVolumesUsageHistory \
+  startdate=2026-01-01 enddate=2026-01-31
+```
+
+---
+
+## Alerts
+
+CloudStack generates alerts when resource thresholds are crossed or system components enter error states. Alerts appear in the Admin UI dashboard and can be queried or generated via API.
+
+### Alert types
+
+Alerts are identified by a short integer type code. Common types include capacity alerts (CPU, memory, storage threshold exceeded), agent disconnection alerts, and system VM health alerts.
+
+### Managing alerts via API
+
+```bash
+# List current alerts
+cloudstack-api listAlerts
+
+# Filter by type
+cloudstack-api listAlerts type=<type-code>
+
+# Generate a manual alert (Admin only)
+cloudstack-api generateAlert \
+  type=<type-code> \
+  name="Scheduled maintenance alert" \
+  description="Host rack-3 going offline for maintenance" \
+  zoneid=<zone-uuid>
+
+# Archive (dismiss) alerts
+cloudstack-api archiveAlerts ids=<alert-uuid-1>,<alert-uuid-2>
+
+# Delete alerts
+cloudstack-api deleteAlerts ids=<alert-uuid>
+```
+
+The `generateAlert` command accepts an optional `podid` to associate the alert with a specific pod within the zone.
+
+<Warning>
+  Alert threshold settings such as `capacity.check.period` (default `300000` ms) control how frequently CloudStack evaluates capacity-based alert conditions. Reducing this value increases monitoring precision at the cost of more frequent database queries.
+</Warning>
+
+---
+
+## Event log
+
+The CloudStack event log records every API call, resource state change, and system event. Events are stored in the database and are queryable via API.
+
+```bash
+# List recent events
+cloudstack-api listEvents pagesize=50
+
+# Filter by resource type
+cloudstack-api listEvents type=VM.CREATE
+
+# Filter by date range
+cloudstack-api listEvents \
+  startdate=2026-01-01 \
+  enddate=2026-01-31
+
+# Filter by account
+cloudstack-api listEvents account=myaccount domainid=<domain-uuid>
+```
+
+Each event record includes:
+- `type` — event type string (e.g., `VM.CREATE`, `NETWORK.CREATE`, `USER.LOGIN`)
+- `description` — human-readable description of the action
+- `username` — user who triggered the event
+- `account` — account that owns the affected resource
+- `level` — `INFO`, `WARN`, or `ERROR`
+- `state` — `Completed`, `Scheduled`, or `Started`
+- `created` — timestamp
+
+<Tip>
+  Filter events by `level=ERROR` to quickly identify failed operations across all accounts and resource types.
+</Tip>
+
+---
+
+## Usage server
+
+The usage server aggregates raw resource consumption records into billable usage data. It runs as a separate process and writes to the `cloud_usage` database schema.
+
+### Querying usage records
+
+```bash
+# List usage records for a date range (required parameters)
+cloudstack-api listUsageRecords \
+  startdate=2026-01-01 \
+  enddate=2026-01-31
+
+# Filter by account
+cloudstack-api listUsageRecords \
+  startdate=2026-01-01 \
+  enddate=2026-01-31 \
+  account=myaccount
+
+# Filter by usage type (integer type code)
+cloudstack-api listUsageRecords \
+  startdate=2026-01-01 \
+  enddate=2026-01-31 \
+  type=1
+
+# Include resource tags in the response
+cloudstack-api listUsageRecords \
+  startdate=2026-01-01 \
+  enddate=2026-01-31 \
+  includetags=true
+
+# Fetch recursively for a domain and all subdomains
+cloudstack-api listUsageRecords \
+  startdate=2026-01-01 \
+  enddate=2026-01-31 \
+  domainid=<domain-uuid> \
+  isrecursive=true
+```
+
+`listUsageRecords` parameters:
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `startdate` | Yes | Start of the query window |
+| `enddate` | Yes | End of the query window |
+| `account` | No | Filter by account name |
+| `accountid` | No | Filter by account UUID |
+| `domainid` | No | Filter by domain |
+| `projectid` | No | Filter by project |
+| `type` | No | Filter by usage type code |
+| `usageid` | No | Filter by resource UUID (must be used with `type`) |
+| `includetags` | No | Include resource tags in each record |
+| `oldformat` | No | Use legacy format with internal DB IDs instead of UUIDs |
+| `isrecursive` | No | Fetch recursively across subdomains (since 4.15) |
+
+### Triggering a usage aggregation run
+
+```bash
+cloudstack-api generateUsageRecords \
+  startdate=2026-01-01 \
+  enddate=2026-01-01
+```
+
+### Usage server health
+
+Check usage server status via `listUsageServerMetrics`:
+
+```bash
+cloudstack-api listUsageServerMetrics
+```
+
+Returns `hostname`, `lastheartbeat`, `lastsuccessfuljob`, `usageislocal`, and `collectiontime`.
+
+---
+
+## Prometheus integration
+
+The CloudStack metrics APIs can be scraped by Prometheus by building a metrics exporter that polls the CloudStack API and exposes results in Prometheus text format.
+
+A typical scrape configuration targets the CloudStack API endpoint and authenticates with an admin API key:
+
+```yaml
+scrape_configs:
+  - job_name: 'cloudstack'
+    static_configs:
+      - targets: ['cloudstack-api-exporter:9100']
+    scrape_interval: 60s
+```
+
+Key metrics to expose from the CloudStack metrics APIs:
+
+<AccordionGroup>
+  <Accordion title="Infrastructure counts">
+    Derived from `listInfrastructure`: gauge metrics for zones, pods, clusters, hosts, storage pools, system VMs, routers, and open alerts.
+  </Accordion>
+  <Accordion title="Host resource utilization">
+    Derived from `listHostsMetrics`: CPU used/allocated/total in GHz, memory used/allocated/total in GB, network read/write bytes, and threshold breach boolean flags.
+  </Accordion>
+  <Accordion title="Management server JVM health">
+    Derived from `listMgmtsMetrics`: heap memory used/total, thread counts by state (runnable, blocked, waiting, daemon), system load averages (1m, 5m, 15m), and active session count.
+  </Accordion>
+  <Accordion title="Database health">
+    Derived from `listDbMetrics`: connection count, uptime, total queries, and load averages on the database host.
+  </Accordion>
+  <Accordion title="Alert count">
+    Derived from `listAlerts` count or the `alerts` field from `listInfrastructure`. Use this as an alerting signal in Grafana.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  Set `allow.list.metrics.computation` to `true` (the default) to enable zone and cluster aggregate metrics. For very large deployments (thousands of hosts), consider querying at the cluster level rather than zone level to reduce response time.
+</Note>

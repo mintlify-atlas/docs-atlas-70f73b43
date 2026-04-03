@@ -1,0 +1,247 @@
+---
+title: "Network Plugins"
+description: "Extend CloudStack networking with SDN integrations: NSX, Tungsten Fabric, Netris, OVS, and more."
+---
+
+CloudStack's networking layer is built around the concept of network elements. A network element is a plugin that provides one or more network services—such as DHCP, DNS, firewall, load balancing, port forwarding, static NAT, or VPC gateway—within an isolated or shared network. Each plugin registers itself as a named `Network.Provider` and declares which services it can fulfill.
+
+Plugins are installed on the CloudStack management server and activated per physical network. An administrator adds the physical network service provider, then configures the specific plugin with the connectivity details of the external SDN controller or virtual switch.
+
+## Available network plugins
+
+<CardGroup cols={2}>
+  <Card title="NSX (VMware NSX-T)" icon="network">
+    Software-defined networking for VMware environments using VMware NSX-T. Provides isolated networks, VPC-level constructs, firewall, load balancing, port forwarding, static NAT, DHCP, and DNS. Each CloudStack zone connects to one NSX manager.
+  </Card>
+  <Card title="Netris" icon="sliders">
+    IP fabric automation and network abstraction for bare metal and cloud environments. Provides VPC, DHCP, DNS, static NAT, port forwarding, network ACL, and load balancing services. Manages VNets and VPCs mapped to Netris constructs.
+  </Card>
+  <Card title="Tungsten Fabric" icon="share-2">
+    Formerly OpenContrail. An open-source SDN platform with a distributed control plane. Provides firewall, load balancing, port forwarding, static NAT, DNS, and multi-tenant network isolation for KVM and VMware hypervisors.
+  </Card>
+  <Card title="Open vSwitch (OVS)" icon="layers">
+    Open-source virtual switching with GRE tunnel overlay networking. Provides connectivity and segmentation between VMs across hosts without an external controller.
+  </Card>
+  <Card title="NiciraNVP (NSX-V)" icon="git-branch">
+    VMware NSX for vSphere (NSX-V) integration using Nicira NVP API. Manages logical switches and logical routers. Supports isolated and shared guest networks, static NAT, and port forwarding on NSX logical routers.
+  </Card>
+  <Card title="Internal load balancer" icon="scale">
+    Built-in software load balancer running on a dedicated virtual router VM within the VPC. Provides internal load balancing without requiring an external hardware or software appliance.
+  </Card>
+  <Card title="DNS Notifier" icon="bell">
+    Lightweight element that provides DNS service capability tracking within CloudStack. Used to integrate external DNS systems that are notified when VM network changes occur.
+  </Card>
+  <Card title="GloboDNS" icon="globe">
+    Integration with Globo DNS for external DNS record management. Automatically creates and removes DNS records as VMs are created and destroyed.
+  </Card>
+</CardGroup>
+
+## NSX (VMware NSX-T)
+
+The NSX plugin (`plugins/network-elements/nsx`) integrates CloudStack with VMware NSX-T. It implements the `Nsx` network provider and runs as a virtual router element of type `VirtualRouterProvider.Type.Nsx`.
+
+### Supported services
+
+The NSX element implements: `DhcpServiceProvider`, `DnsServiceProvider`, `StaticNatServiceProvider`, `PortForwardingServiceProvider`, `FirewallServiceProvider`, `LoadBalancingServiceProvider`, `NetworkACLServiceProvider`, and `VpcProvider`.
+
+This means a single NSX-backed network offering can provide the full set of networking services—DHCP, DNS, NAT, firewall, load balancing, and VPC routing—without a CloudStack virtual router.
+
+### How it works
+
+When a network or VPC is provisioned on NSX:
+
+- CloudStack creates an **NSX Tier-1 gateway** (`CreateNsxTier1GatewayCommand`) for each VPC or isolated network.
+- Guest network segments are created as **NSX segments** (`CreateNsxSegmentCommand`) and attached to the Tier-1 gateway.
+- A DHCP relay config is applied (`CreateNsxDhcpRelayConfigCommand`) for DHCP forwarding.
+- Firewall rules are created as **distributed firewall rules** (`CreateNsxDistributedFirewallRulesCommand`).
+- Load balancer rules, port forwarding rules, and static NAT entries are pushed to the Tier-1 gateway.
+
+### Adding the NSX provider
+
+<Steps>
+  <Step title="Add NSX as a physical network service provider">
+    In the CloudStack UI, navigate to **Infrastructure** > **Zones** > select your zone > **Physical Networks** > your physical network > **Network Service Providers**. Enable the **Nsx** provider.
+  </Step>
+  <Step title="Add the NSX device">
+    Use `addNsxController` with the NSX manager URL, username, password, and the transport zone UUID from your NSX-T deployment.
+  </Step>
+  <Step title="Create a network offering">
+    Create a network offering that specifies **Nsx** as the provider for the services you want (routing, firewall, load balancer, etc.).
+  </Step>
+</Steps>
+
+## Netris
+
+The Netris plugin (`plugins/network-elements/netris`) integrates CloudStack with the Netris IP fabric automation platform. It implements the `Netris` network provider.
+
+### Supported services
+
+`DhcpServiceProvider`, `DnsServiceProvider`, `VpcProvider`, `StaticNatServiceProvider`, `IpDeployer`, `PortForwardingServiceProvider`, `NetworkACLServiceProvider`, `LoadBalancingServiceProvider`.
+
+### How it works
+
+Netris manages network resources as VNets (guest networks) and VPCs mapped to Netris V-Nets and VPCs. When CloudStack creates a VPC:
+
+- A Netris VPC is created (`CreateNetrisVpcCommand`) with the VPC's CIDR.
+- Guest network segments become Netris V-Nets (`CreateNetrisVnetCommand`).
+- Static routes, NAT rules, port forwarding rules, ACL rules, and load balancer rules are programmed in Netris via their respective commands.
+
+The Netris element also supports auto-scale counters (`AutoScaleCounter`) through the `LoadBalancingServiceProvider` interface.
+
+### Adding the Netris provider
+
+```bash
+cloudstack-api addNetrisController \
+  zoneid="<zone-uuid>" \
+  url="https://netris.example.com" \
+  username="admin" \
+  password="<password>"
+```
+
+## Tungsten Fabric
+
+The Tungsten Fabric plugin (`plugins/network-elements/tungsten`) integrates CloudStack with Tungsten Fabric (formerly OpenContrail). It implements the `Tungsten` network provider.
+
+### Supported services
+
+`StaticNatServiceProvider`, `IpDeployer`, `FirewallServiceProvider`, `LoadBalancingServiceProvider`, `PortForwardingServiceProvider`, `DnsServiceProvider`, and supports network migration via `NetworkMigrationResponder`.
+
+### How it works
+
+Tungsten Fabric provides a distributed SDN control plane. CloudStack maps its networks to Tungsten virtual networks. The `TungstenElement` uses a `TungstenProvider` resource registered per zone, communicating with the Tungsten API server.
+
+Key operations include:
+- Creating and managing Tungsten virtual networks, floating IP pools, and logical routers.
+- Applying network policies (`ApplyTungstenNetworkPolicyCommand`) for firewall rules.
+- Managing port forwarding (`ApplyTungstenPortForwardingCommand`).
+- Creating load balancer pools and members.
+- Tag management via `ApplyTungstenTagCommand` for policy assignment.
+
+### Adding the Tungsten provider
+
+```bash
+cloudstack-api addTungstenFabricProvider \
+  zoneid="<zone-uuid>" \
+  name="tungsten-zone1" \
+  tungstenproviderhostname="tf-controller.example.com" \
+  tungstenproviderport=8082
+```
+
+<Note>
+Tungsten Fabric requires KVM or VMware hypervisors. The Tungsten vRouter agent must be installed on each hypervisor host to handle data-plane forwarding.
+</Note>
+
+## Open vSwitch (OVS)
+
+The OVS plugin (`plugins/network-elements/ovs`) provides virtual switching with GRE tunnel overlay networking. It implements the `Ovs` network provider.
+
+### How it works
+
+The OVS element manages GRE tunnels between hypervisor hosts to create overlay networks. CloudStack agents on each host communicate with the local Open vSwitch daemon via the OVS agent API. Commands include:
+
+- `OvsCreateTunnelCommand` / `OvsDestroyTunnelCommand`: Establish or tear down GRE tunnels between hosts.
+- `OvsCreateGreTunnelCommand`: Create GRE-specific tunnels.
+- `OvsSetTagAndFlowCommand`: Set VLAN tags and OpenFlow rules on OVS bridges.
+- `OvsDeleteFlowCommand`: Remove flow entries.
+- `OvsDestroyBridgeCommand`: Remove an OVS bridge.
+
+OVS operates at the hypervisor level without requiring an external SDN controller. Network isolation is enforced through VLAN tags and GRE tunnel key assignment.
+
+## NiciraNVP (NSX-V)
+
+The NiciraNVP plugin (`plugins/network-elements/nicira-nvp`) integrates CloudStack with VMware NSX for vSphere (NSX-V) through the Nicira NVP API. It implements the `NiciraNvp` network provider.
+
+### Supported services
+
+Provides connectivity for isolated and shared guest networks, static NAT, and port forwarding via NSX logical routers and logical switches.
+
+### How it works
+
+NiciraNVP maps CloudStack isolated networks to NSX logical switches. Each logical switch port corresponds to a VM NIC. Port forwarding and static NAT rules are programmed on NSX logical routers (`CreateLogicalRouterCommand`, `ConfigurePortForwardingRulesOnLogicalRouterCommand`, `ConfigureStaticNatRulesOnLogicalRouterCommand`).
+
+Shared networks use `ConfigureSharedNetworkUuidCommand` and `ConfigureSharedNetworkVlanIdCommand` to associate the CloudStack network with the correct NSX logical switch.
+
+### Adding a Nicira NVP device
+
+```bash
+cloudstack-api addNiciraNvpDevice \
+  physicalnetworkid="<phys-net-uuid>" \
+  hostname="nsxv-manager.example.com" \
+  username="admin" \
+  password="<password>" \
+  transportzoneuuid="<transport-zone-uuid>"
+```
+
+Manage existing devices:
+
+```bash
+cloudstack-api listNiciraNvpDevices physicalnetworkid="<phys-net-uuid>"
+cloudstack-api deleteNiciraNvpDevice id="<device-uuid>"
+```
+
+## Internal load balancer
+
+The internal load balancer plugin (`plugins/network-elements/internal-loadbalancer`) deploys a dedicated VM (`InternalLoadBalancerVMManager`) inside a VPC tier to perform load balancing without external appliances.
+
+The internal load balancer VM is similar to a CloudStack virtual router but dedicated to load balancing traffic within the VPC. It supports the `LoadBalancingService` for internal (private) VIPs only.
+
+To use it, create a network offering that includes the internal load balancer as the load balancing provider, and assign that offering to a VPC tier that requires software load balancing.
+
+```bash
+cloudstack-api createNetworkOffering \
+  name="InternalLbTier" \
+  traffictype=Guest \
+  guestiptype=Isolated \
+  supportedservices="Dhcp,Dns,SourceNat,Lb" \
+  serviceproviderlist[0].service=Lb \
+  serviceproviderlist[0].provider=InternalLbVm
+```
+
+## DNS Notifier
+
+The DNS Notifier plugin (`plugins/network-elements/dns-notifier`) is a lightweight `NetworkElement` that registers `Network.Service.Dns` capability. It does not perform DNS operations itself; it acts as a signal to external DNS integrations that DNS events should be propagated.
+
+The `DnsNotifier` class extends `AdapterBase` and implements `NetworkElement`. It provides only the DNS capability map and is used as a placeholder or notification hook for external systems that monitor CloudStack network lifecycle events.
+
+## GloboDNS
+
+The GloboDNS plugin (`plugins/network-elements/globodns`) integrates with Globo DNS to manage external DNS records automatically.
+
+Operations supported:
+- `CreateOrUpdateDomainCommand`: Create or update a DNS domain in Globo DNS.
+- `CreateOrUpdateRecordAndReverseCommand`: Create or update a DNS A record and its PTR reverse record.
+- `RemoveDomainCommand`: Remove a DNS domain.
+- `RemoveRecordCommand`: Remove a DNS record.
+
+Register the Globo DNS host:
+
+```bash
+cloudstack-api addGloboDnsHost \
+  physicalnetworkid="<phys-net-uuid>" \
+  hostname="globodns.example.com" \
+  username="admin" \
+  password="<password>"
+```
+
+## Registering a plugin with a physical network
+
+All network element plugins follow the same activation pattern:
+
+<Steps>
+  <Step title="Enable the service provider">
+    Navigate in the UI to the physical network for your zone and enable the provider (e.g., **Nsx**, **Netris**, **Tungsten**, **NiciraNvp**) under **Network Service Providers**.
+  </Step>
+  <Step title="Configure the external device">
+    Use the provider-specific `add*` API command to register the external controller/device with CloudStack, supplying connection credentials and zone information.
+  </Step>
+  <Step title="Create a network offering">
+    Create a network offering that lists the plugin as the provider for each desired service (DHCP, firewall, load balancer, etc.).
+  </Step>
+  <Step title="Deploy a network or VPC">
+    When a user creates a network or VPC using the new offering, CloudStack routes all service operations to the registered plugin.
+  </Step>
+</Steps>
+
+<Tip>
+Multiple plugins can coexist in the same zone on different physical networks or with different network offerings. For example, one offering might use the virtual router for DHCP and NSX for firewall, while another uses Netris for all services.
+</Tip>

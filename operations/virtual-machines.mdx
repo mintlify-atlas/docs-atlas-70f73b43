@@ -1,0 +1,360 @@
+---
+title: "Virtual Machines"
+description: "Deploy and manage virtual machines in CloudStack: service offerings, templates, lifecycle operations, and migration."
+---
+
+CloudStack manages the full lifecycle of virtual machines, from deploying instances with the `deployVirtualMachine` API command through day-two operations like migration, scaling, and snapshotting.
+
+## Service offerings
+
+A service offering defines the compute resources allocated to a VM: CPU count, CPU speed, memory, and optionally storage QoS parameters. Administrators create service offerings; users select from the available offerings when deploying VMs.
+
+<Tabs>
+  <Tab title="Fixed offerings">
+    CPU and memory values are set by the administrator and cannot be changed by users.
+
+    ```bash
+    # Example fixed service offering parameters
+    name=small
+    displaytext="Small Instance"
+    cpunumber=2
+    cpuspeed=2000        # MHz
+    memory=2048          # MB
+    ```
+  </Tab>
+  <Tab title="Custom offerings">
+    Administrators define minimum and maximum bounds; users specify the exact values at deploy time. Useful when you want to give users flexibility while enforcing capacity limits.
+  </Tab>
+</Tabs>
+
+### Dynamic scaling
+
+Service offerings can support dynamic scaling (`dynamicscalingenabled=true`), which allows CPU and memory to be changed on a running VM without rebooting—provided the hypervisor and guest OS support it. The `scaleVirtualMachine` API command performs the operation on a running VM.
+
+```bash
+# API: scaleVirtualMachine — resize a running VM
+id=<vm-uuid>
+serviceofferingid=<new-offering-uuid>
+```
+
+## Templates and ISOs
+
+### Registering a template
+
+Templates are pre-built disk images that CloudStack uses as the root disk when deploying a VM. Register a template by providing its URL and format:
+
+```bash
+# API: registerTemplate
+name=Ubuntu-22.04-LTS
+displaytext="Ubuntu 22.04 LTS"
+format=QCOW2
+hypervisor=KVM
+ostypeid=<os-type-uuid>
+url=https://example.com/ubuntu-22.04.qcow2
+zoneid=<zone-uuid>
+```
+
+Common formats include `QCOW2` (KVM), `OVA` (VMware), and `VHD` (XenServer/Hyper-V).
+
+### Registering an ISO
+
+ISOs let you install an OS from scratch. Upload an ISO and attach it to a VM during deployment:
+
+```bash
+# API: registerIso
+name=Ubuntu-22.04-installer
+displaytext="Ubuntu 22.04 installer ISO"
+url=https://releases.ubuntu.com/22.04/ubuntu-22.04-live-server-amd64.iso
+zoneid=<zone-uuid>
+ostypeid=<os-type-uuid>
+bootable=true
+```
+
+<Note>
+  When deploying a VM from an ISO rather than a template, the `diskofferingid` parameter in `deployVirtualMachine` refers to the root disk volume, not a data disk.
+</Note>
+
+## Deploying a VM
+
+The `deployVirtualMachine` API command creates and optionally starts an instance. You must provide exactly one of: `templateid`, `volumeid`, or `snapshotid` as the boot source.
+
+### Deploy your first VM
+
+<Steps>
+  <Step title="Choose a zone">
+    Select the availability zone for the VM. This determines which networks, storage pools, and hosts are available.
+
+    ```bash
+    zoneid=<zone-uuid>
+    ```
+  </Step>
+  <Step title="Select a service offering">
+    Pick the compute resources for the VM.
+
+    ```bash
+    serviceofferingid=<offering-uuid>
+    ```
+  </Step>
+  <Step title="Select a template or ISO">
+    Specify the boot source. Use `templateid` for a pre-built image, `snapshotid` to restore from a volume snapshot, or `volumeid` to boot from an existing volume (since 4.21).
+
+    ```bash
+    templateid=<template-uuid>
+    ```
+  </Step>
+  <Step title="Configure networking">
+    Specify which networks to attach the VM to. In Advanced zones, pass a list of network IDs. You can optionally pin the IP address for each network.
+
+    ```bash
+    networkids=<network-uuid>
+
+    # Or use iptonetworklist for per-NIC IP control:
+    # iptonetworklist[0].ip=10.10.10.11
+    # iptonetworklist[0].networkid=<network-uuid>
+    ```
+  </Step>
+  <Step title="Optional: SSH key, user data, affinity">
+    Add SSH keypairs, user data for cloud-init, or affinity group membership:
+
+    ```bash
+    sshkeypairs=my-key
+    userdataid=<userdata-uuid>
+    affinitygroupids=<group-uuid>
+    ```
+  </Step>
+  <Step title="Deploy">
+    Submit the `deployVirtualMachine` request. By default (`startvm=true`), CloudStack creates and immediately starts the VM. Set `startvm=false` to create the VM in a stopped state.
+
+    ```bash
+    # Full example
+    deployVirtualMachine \
+      zoneid=<zone-uuid> \
+      serviceofferingid=<offering-uuid> \
+      templateid=<template-uuid> \
+      networkids=<network-uuid> \
+      name=web-01 \
+      displayname="Web Server 01" \
+      sshkeypairs=my-key
+    ```
+  </Step>
+</Steps>
+
+### Boot options
+
+| Parameter | Values | Description |
+|---|---|---|
+| `boottype` | `BIOS`, `UEFI` | Firmware type for the VM (since 4.14.0) |
+| `bootmode` | `LEGACY`, `SECURE` | Boot mode when using UEFI (since 4.14.0) |
+| `bootintosetup` | `true`/`false` | Boot into hardware setup (VMware only, since 4.15.0) |
+
+### Instance lease
+
+Since CloudStack 4.21.0, VMs can be deployed with a lease duration. When the lease expires, CloudStack takes the configured action:
+
+```bash
+instanceleaseduration=30          # days
+instanceleaseexpiryaction=STOP    # or DESTROY
+```
+
+## VM states and transitions
+
+```
+Created → Starting → Running → Stopping → Stopped
+                              ↓
+                           Rebooting → Running
+                              ↓
+                          Destroying → Destroyed → Expunging → Expunged
+                              ↓
+                           Migrating → Running
+                              ↓
+                            Scaling → Running
+```
+
+| State | Description |
+|---|---|
+| `Running` | VM is powered on and consuming resources |
+| `Stopped` | VM is powered off; root disk and data disks are preserved |
+| `Destroyed` | VM is marked for deletion; can be recovered within the expunge interval |
+| `Expunged` | VM and root disk are permanently deleted |
+
+## VM operations
+
+### Start and stop
+
+```bash
+# Start a stopped VM
+startVirtualMachine id=<vm-uuid>
+
+# Stop a running VM (graceful shutdown)
+stopVirtualMachine id=<vm-uuid> forced=false
+
+# Force stop (equivalent to pulling the power)
+stopVirtualMachine id=<vm-uuid> forced=true
+```
+
+### Reboot
+
+```bash
+rebootVirtualMachine id=<vm-uuid>
+```
+
+### Destroy and restore
+
+```bash
+# Destroy (moves to Destroyed state; recoverable)
+destroyVirtualMachine id=<vm-uuid> expunge=false
+
+# Destroy and immediately expunge (unrecoverable)
+destroyVirtualMachine id=<vm-uuid> expunge=true
+
+# Restore from destroyed state
+restoreVirtualMachine virtualmachineid=<vm-uuid>
+```
+
+<Warning>
+  Once a VM is expunged, its root disk is deleted and the operation cannot be reversed. The `expunge.delay` and `expunge.interval` global settings control how long destroyed VMs are retained before automatic expungement.
+</Warning>
+
+### Live migration
+
+Root administrators can migrate a running VM to another host:
+
+```bash
+# Find eligible hosts
+findHostsForMigration virtualmachineid=<vm-uuid>
+
+# Migrate the VM
+migrateVirtualMachine virtualmachineid=<vm-uuid> hostid=<target-host-uuid>
+```
+
+Users can also request migration of stopped VMs across storage pools using `migrateVirtualMachineWithVolume`.
+
+## Console access
+
+CloudStack deploys Console Proxy VMs (CPVM) in each zone to provide browser-based console access to guest VMs. No direct network path between the user's browser and the hypervisor host is required.
+
+Access the console from the UI by clicking the console icon on a running VM's detail page. The CPVM handles the WebSocket proxy connection to the hypervisor's VNC or RDP session.
+
+<Note>
+  Console Proxy VMs run as system VMs in the `consoleproxy` account. If console access is unavailable, check the CPVM status under Infrastructure > System VMs.
+</Note>
+
+## VM snapshots vs volume snapshots
+
+CloudStack supports two distinct snapshot mechanisms with different use cases.
+
+<Tabs>
+  <Tab title="VM snapshots">
+    A VM snapshot captures the complete state of a running VM, including CPU state, memory contents, and all attached disk states at a single point in time. Useful for checkpointing before risky operations.
+
+    ```bash
+    # Create VM snapshot (API: createVMSnapshot)
+    virtualmachineid=<vm-uuid>
+    name=before-upgrade
+    snapshotmemory=true    # include memory state
+    quiescevm=false
+    ```
+
+    Revert with `revertToVMSnapshot`. Delete with `deleteVMSnapshot`.
+
+    <Warning>
+      VM snapshots with memory are hypervisor-specific and may not be portable. On KVM, VM snapshots require QEMU guest agent for memory-consistent snapshots.
+    </Warning>
+  </Tab>
+  <Tab title="Volume snapshots">
+    A volume snapshot captures the state of a single disk volume. Snapshots are stored in secondary storage and can be used to create new templates or restore individual volumes.
+
+    ```bash
+    # Create volume snapshot (API: createSnapshot)
+    volumeid=<volume-uuid>
+    name=data-backup-2026-04-03
+    quiescevm=true          # quiesce guest before snapshot
+    asyncbackup=false
+    ```
+
+    Schedule recurring snapshots with `createSnapshotPolicy`:
+
+    ```bash
+    volumeid=<volume-uuid>
+    intervaltype=DAILY
+    schedule=00:02          # 02:00 AM
+    timezone=US/Eastern
+    maxsnaps=7              # retain last 7 daily snapshots
+    ```
+  </Tab>
+</Tabs>
+
+## Affinity groups
+
+Affinity groups control the placement of VMs relative to one another across hosts. Assign VMs to an affinity group at deploy time or by updating the VM.
+
+| Type | Behavior |
+|---|---|
+| `host affinity` | All VMs in the group are placed on the same host |
+| `host anti-affinity` | VMs in the group are placed on different hosts |
+
+```bash
+# API: createAffinityGroup
+name=web-tier
+type=host anti-affinity
+description="Keep web servers on separate hosts"
+```
+
+Assign at deploy time:
+
+```bash
+deployVirtualMachine \
+  ... \
+  affinitygroupids=<group-uuid>
+```
+
+<Tip>
+  If CloudStack cannot satisfy an affinity group constraint (for example, because there is only one available host), deployment will fail with `InsufficientServerCapacityException`. Check that the affinity group configuration matches available cluster capacity.
+</Tip>
+
+## GPU support
+
+CloudStack supports GPU passthrough to VMs on hosts with compatible GPUs. GPU devices are exposed as GPU groups and types. Specify the required GPU at deploy time:
+
+```bash
+# Deploy with GPU (listGPUGroups / listGPUDevices for available GPUs)
+deployVirtualMachine \
+  ... \
+  details[0].vgpuType=GRID_K120Q \
+  details[0].pciDevice=Group1
+```
+
+GPU-enabled service offerings can also encode the GPU type requirement, automatically placing VMs only on hosts with matching GPU hardware.
+
+## NIC and IP management
+
+### Adding and removing NICs
+
+```bash
+# Add a NIC to a stopped VM
+addNicToVirtualMachine virtualmachineid=<vm-uuid> networkid=<network-uuid>
+
+# Remove a NIC
+removeNicFromVirtualMachine virtualmachineid=<vm-uuid> nicid=<nic-uuid>
+
+# Change the default NIC
+updateDefaultNicForVirtualMachine virtualmachineid=<vm-uuid> nicid=<nic-uuid>
+```
+
+### Secondary IPs on a NIC
+
+```bash
+# Add a secondary IP to a NIC
+addIpToNic nicid=<nic-uuid> ipaddress=10.10.10.50
+
+# Remove secondary IP
+removeIpFromNic id=<secondary-ip-uuid>
+```
+
+### Multiqueue NICs
+
+For high-throughput workloads, enable multiqueue NICs at deploy time:
+
+```bash
+nicmultiquevenumber=4
+```

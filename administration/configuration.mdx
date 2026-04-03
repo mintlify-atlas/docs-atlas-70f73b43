@@ -1,0 +1,207 @@
+---
+title: "Configuration"
+description: "Manage CloudStack global configuration settings, service offerings, and network offerings."
+---
+
+Global settings are key-value pairs stored in the CloudStack database that control how the management server and its subsystems behave. You can browse and update them from the Admin UI under **Configuration > Global Settings**, or by calling the API directly.
+
+## Global settings overview
+
+Every setting belongs to a category that reflects its sensitivity:
+
+| Category | Description |
+|----------|-------------|
+| `Advanced` | Tunable parameters exposed to administrators |
+| `Alert` | Thresholds that trigger notifications |
+| `Hidden` | Encrypted values (keys, certificates) — not displayed in the UI |
+| `Secure` | Encrypted values visible only through the API |
+
+Each setting also carries a scope bitmask that determines which objects can have per-scope overrides: `Global`, `Zone`, `Cluster`, `StoragePool`, `Account`, `Domain`, or `ImageStore`. Settings that are `isDynamic = true` take effect immediately without a management server restart.
+
+## Key settings by category
+
+<AccordionGroup>
+  <Accordion title="Compute and VM placement">
+    | Setting | Default | Description |
+    |---------|---------|-------------|
+    | `vm.allocation.algorithm` | `random` | Order in which hosts within a cluster are considered for VM allocation. Options: `random`, `firstfit`, `userdispersing`, `firstfitleastconsumed`. |
+    | `vm.deployment.planner` | `FirstFitPlanner` | Deployment planner used when a service offering does not specify one. |
+    | `expunge.delay` | (same as `expunge.interval`) | Seconds to wait before actually expunging a destroyed VM. |
+    | `expunge.interval` | `86400` | Seconds between expunge thread runs. |
+    | `expunge.workers` | `1` | Number of worker threads performing expunge. |
+    | `host.retry` | `2` | Number of times to retry alternate hosts when creating a volume fails. |
+  </Accordion>
+
+  <Accordion title="Networking">
+    | Setting | Default | Description |
+    |---------|---------|-------------|
+    | `network.gc.wait` | `600` | Seconds to wait before garbage-collecting a network that has no active VMs. |
+    | `network.gc.interval` | `600` | Seconds between network GC thread runs. |
+    | `router.check.interval` | `30` | Seconds between virtual router health checks. |
+    | `secstorage.allowed.internal.sites` | — | Comma-separated CIDRs that secondary storage VMs are allowed to reach on internal networks. |
+    | `secstorage.session.max` | `50` | Maximum concurrent sessions on a secondary storage VM. |
+  </Accordion>
+
+  <Accordion title="Storage">
+    | Setting | Default | Description |
+    |---------|---------|-------------|
+    | `capacity.check.period` | `300000` | Milliseconds between capacity checks that trigger alert notifications. |
+    | `storage.pool.disk.wait` | `3600` | Seconds to wait for a disk on a storage pool before timing out. |
+    | `enable.ha.storage.migration` | `true` | Whether live storage migration is attempted during host HA. |
+  </Accordion>
+
+  <Accordion title="Security">
+    | Setting | Default | Description |
+    |---------|---------|-------------|
+    | `ca.plugin.root.issuer.dn` | `CN=ca.cloudstack.apache.org` | Distinguished name used as the issuer field in root CA certificates. |
+    | `ca.plugin.root.auth.strictness` | `false` | When `true`, requires a valid client certificate for every TLS connection. |
+    | `ca.plugin.root.allow.expired.cert` | `true` | Whether an expired client certificate is accepted during SSL handshake. |
+    | `allow.list.metrics.computation` | `true` | Whether zone and cluster metrics APIs compute live statistics. Disable for very large environments. |
+  </Accordion>
+</AccordionGroup>
+
+## Listing settings via the API
+
+Use `listConfigurations` to query settings. You can filter by name, category, group, subgroup, and scope.
+
+```bash
+# List all settings whose name contains "expunge"
+cloudstack-api listConfigurations name=expunge.delay
+
+# List all settings in the Alert category
+cloudstack-api listConfigurations category=Alert
+
+# List settings for a specific zone
+cloudstack-api listConfigurations zoneid=<zone-uuid>
+```
+
+The response includes `name`, `value`, `defaultvalue`, `description`, `category`, `isdynamic`, and `scope`.
+
+## Updating settings
+
+<Tabs>
+  <Tab title="UI">
+    <Steps>
+      <Step title="Open Global Settings">
+        In the Admin UI, navigate to **Configuration** > **Global Settings**.
+      </Step>
+      <Step title="Search for the setting">
+        Use the search box to filter by name or browse the grouped view. Click the setting name to open its detail pane.
+      </Step>
+      <Step title="Edit the value">
+        Click the **Edit** icon, type the new value, and click **Save**.
+      </Step>
+      <Step title="Restart if required">
+        If the setting is not marked dynamic (`isdynamic = false`), restart the management server for the change to take effect.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="API">
+    The `updateConfiguration` command accepts the following parameters:
+
+    | Parameter | Type | Required | Description |
+    |-----------|------|----------|-------------|
+    | `name` | string | Yes | Name of the configuration key |
+    | `value` | string | No | New value (max 4096 characters) |
+    | `zoneid` | UUID | No | Apply override to this zone only |
+    | `clusterid` | UUID | No | Apply override to this cluster only |
+    | `storageid` | UUID | No | Apply override to this storage pool only |
+    | `accountid` | UUID | No | Apply override to this account only |
+    | `domainid` | UUID | No | Apply override to this domain only |
+    | `imagestoreuuid` | UUID | No | Apply override to this image store only |
+
+    ```bash
+    # Update a global setting
+    cloudstack-api updateConfiguration \
+      name=vm.allocation.algorithm \
+      value=userdispersing
+
+    # Override a setting for a specific zone
+    cloudstack-api updateConfiguration \
+      name=network.gc.wait \
+      value=300 \
+      zoneid=<zone-uuid>
+    ```
+
+    Settings in the `Hidden` or `Secure` categories are encrypted in the database. The API response returns the encrypted form for those categories.
+  </Tab>
+</Tabs>
+
+<Note>
+  The `EnableDynamicApiChecker` configuration key is restricted and cannot be modified via the API. Attempting to update it returns a `PARAM_ERROR`.
+</Note>
+
+## Per-scope overrides
+
+CloudStack evaluates configuration values in a precedence hierarchy. A scope-specific override takes precedence over the global value.
+
+```
+Account/Domain > StoragePool > Cluster > Zone > Global
+```
+
+When you call `listConfigurations` with a `zoneid`, `clusterid`, `storageid`, `accountid`, `domainid`, or `imagestoreuuid`, the response includes a `scope` field indicating the level at which the returned value is set.
+
+To reset a scoped override back to the global value, call `resetConfiguration`:
+
+```bash
+cloudstack-api resetConfiguration name=network.gc.wait zoneid=<zone-uuid>
+```
+
+## Service offerings
+
+Service offerings define the compute resources (CPU, memory) and behavior of instances. Create and manage them from **Service Offerings** in the Admin UI.
+
+<CardGroup cols={2}>
+  <Card title="Compute offerings" icon="cpu">
+    Define CPU cores, CPU speed, and RAM for user VMs. Can be fixed (specific values set by the admin) or custom (user sets values within admin-defined bounds). Enable **HA** on an offering to automatically restart VMs on another host when their host fails.
+  </Card>
+  <Card title="Disk offerings" icon="hard-drive">
+    Define storage sizes for data volumes and root disks. Supports fixed and custom sizes, QoS (IOPS limits), and storage tags for pool selection.
+  </Card>
+  <Card title="Network offerings" icon="network">
+    Define the services available to a network: DHCP, DNS, firewall, load balancing, port forwarding, VPN, source NAT. Specify the provider for each service (CloudStack virtual router, external appliance, etc.).
+  </Card>
+  <Card title="System offerings" icon="server">
+    Define resources for internal system VMs: the virtual router, the secondary storage VM, and the console proxy VM. Use **System Service Offerings** to tune the resources allocated to these.
+  </Card>
+</CardGroup>
+
+### Creating a compute offering
+
+<Steps>
+  <Step title="Navigate to Service Offerings">
+    In the Admin UI, go to **Service Offerings** > **Compute Offerings** and click **Add Compute Offering**.
+  </Step>
+  <Step title="Configure compute resources">
+    Set the name, description, number of CPU cores, CPU speed (MHz), and memory (MB). Check **Enable HA** if you want VMs using this offering to restart automatically on host failure.
+  </Step>
+  <Step title="Set the deployment planner (optional)">
+    Specify a deployment planner heuristic to override the global `vm.deployment.planner` setting for instances of this offering. If left blank, the global setting applies.
+  </Step>
+  <Step title="Set scope">
+    Choose whether the offering is available to all domains or restrict it to a specific domain.
+  </Step>
+</Steps>
+
+<Warning>
+  Changing or deleting a service offering does not affect running instances. Existing VMs retain the resource allocation they had at launch time.
+</Warning>
+
+## Network offerings
+
+Network offerings control which services and providers are active for a network. Each network is associated with exactly one network offering at creation time.
+
+To view or edit network offerings: **Service Offerings** > **Network Offerings**.
+
+Key fields when creating a network offering:
+
+| Field | Description |
+|-------|-------------|
+| **Guest type** | `Shared` (flat network spanning multiple accounts) or `Isolated` (private network per account with a virtual router). |
+| **Specify VLAN** | Whether to allow admin to assign a specific VLAN tag. |
+| **Supported services** | The set of services (DHCP, Firewall, SourceNat, StaticNat, PortForwarding, Lb, Vpn) and their providers. |
+| **Conserve mode** | When enabled, public IPs are not acquired until a service actually needs them (reduces IP consumption). |
+
+<Tip>
+  Use the `listNetworkOfferings` API with `state=Enabled` to see all offerings currently available for creating new networks. Disabled offerings can still be used by existing networks.
+</Tip>

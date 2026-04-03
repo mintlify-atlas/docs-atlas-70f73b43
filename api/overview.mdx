@@ -1,0 +1,201 @@
+---
+title: "API Overview"
+description: "The CloudStack query API: endpoint format, authentication, pagination, async jobs, and response formats."
+---
+
+The CloudStack API is a query-based HTTP API. Every operation is an HTTP GET or POST request to a single endpoint with parameters passed as a query string or request body.
+
+## Endpoint
+
+All API requests are sent to:
+
+```
+http://<management-server>:8080/client/api
+```
+
+For example:
+
+```
+http://192.0.2.10:8080/client/api
+```
+
+<Note>
+  CloudStack also supports HTTPS. If TLS is configured on the management server, replace `http` with `https` and use the appropriate port (default 8443).
+</Note>
+
+## Request format
+
+Every request requires at minimum three parameters:
+
+| Parameter   | Description                                                         |
+| ----------- | ------------------------------------------------------------------- |
+| `command`   | The API command name, e.g. `listZones`, `deployVirtualMachine`      |
+| `apiKey`    | The API key associated with the account making the request          |
+| `signature` | HMAC-SHA1 signature of the request. See [API Authentication](/api/authentication) |
+
+Additional parameters are command-specific. Parameters are passed as URL query string key-value pairs:
+
+```
+http://192.0.2.10:8080/client/api?command=listZones&apiKey=...&signature=...
+```
+
+## Response formats
+
+CloudStack returns responses in **JSON** by default. To request XML instead, add `response=xml` to your request.
+
+**JSON (default):**
+
+```
+?command=listZones&response=json&...
+```
+
+**XML:**
+
+```
+?command=listZones&response=xml&...
+```
+
+### Example JSON response
+
+```json
+{
+  "listzonesresponse": {
+    "count": 1,
+    "zone": [
+      {
+        "id": "a2f3de84-b3c1-4f70-99f2-abcdef123456",
+        "name": "us-east-1",
+        "networktype": "Advanced",
+        "allocationstate": "Enabled"
+      }
+    ]
+  }
+}
+```
+
+### Error response
+
+When a request fails, the response includes `errorcode`, `cserrorcode`, and `errortext`:
+
+```json
+{
+  "listzonesresponse": {
+    "uuidList": [],
+    "errorcode": 401,
+    "errortext": "unable to authenticate user, check if username/password are correct"
+  }
+}
+```
+
+| Field         | Description                                                         |
+| ------------- | ------------------------------------------------------------------- |
+| `errorcode`   | HTTP-equivalent error code (e.g. 401, 431, 530)                     |
+| `cserrorcode` | CloudStack-specific error code for more precise error identification |
+| `errortext`   | Human-readable description of the error                             |
+
+## Enabling API access
+
+Before making API requests, you must generate an API key and Secret key for your account.
+
+<Steps>
+  <Step title="Log in to the CloudStack UI">
+    Navigate to `http://<management-server>:8080/client` and sign in.
+  </Step>
+  <Step title="Go to your account settings">
+    Click your username in the top-right corner and select **My Account**, or navigate to **Accounts** in the left sidebar and select your account.
+  </Step>
+  <Step title="Generate API keys">
+    Click the **API keys** tab (or **View API keys** link). Click **Generate Keys**. Copy both the **API Key** and **Secret Key** — the Secret Key is only shown once.
+  </Step>
+</Steps>
+
+You can also generate keys programmatically using the `registerUserKeys` API command (admin only):
+
+```bash
+curl "http://192.0.2.10:8080/client/api?command=registerUserKeys&id=<user-uuid>&apiKey=<admin-api-key>&signature=<sig>"
+```
+
+## Pagination
+
+List commands support pagination via `page` and `pagesize` parameters. Pages are 1-indexed.
+
+| Parameter  | Description                               | Default |
+| ---------- | ----------------------------------------- | ------- |
+| `page`     | Page number to retrieve, starting from 1  | —       |
+| `pagesize` | Number of results per page (max 500)      | 20      |
+
+The response includes a `count` field with the total number of matching records:
+
+```json
+{
+  "listvirtualmachinesresponse": {
+    "count": 142,
+    "virtualmachine": [...]
+  }
+}
+```
+
+To iterate through all results:
+
+```python
+page = 1
+pagesize = 100
+while True:
+    params = {"command": "listVirtualMachines", "page": page, "pagesize": pagesize, ...}
+    response = make_request(params)
+    vms = response.get("listvirtualmachinesresponse", {}).get("virtualmachine", [])
+    if not vms:
+        break
+    process(vms)
+    page += 1
+```
+
+## Synchronous vs. asynchronous commands
+
+CloudStack API commands are either **synchronous** (result returned immediately) or **asynchronous** (job queued, result polled later).
+
+### Synchronous commands
+
+The response contains the result object directly. Examples: `createNetwork`, `listVirtualMachines`.
+
+### Asynchronous commands
+
+The initial response contains a `jobid` and `jobstatus` of `0` (pending). Examples: `deployVirtualMachine`, `stopVirtualMachine`, `createSnapshot`.
+
+```json
+{
+  "deployvirtualmachineresponse": {
+    "id": "b2e4f1a0-...",
+    "jobid": "8c3a2b10-...",
+    "jobstatus": 0
+  }
+}
+```
+
+Poll the job status using `queryAsyncJobResult`:
+
+```bash
+curl "http://192.0.2.10:8080/client/api?command=queryAsyncJobResult&jobid=<jobid>&apiKey=...&signature=..."
+```
+
+The `jobstatus` field returns:
+
+| Value | Meaning           |
+| ----- | ----------------- |
+| `0`   | Pending / in progress |
+| `1`   | Succeeded          |
+| `2`   | Failed             |
+
+When `jobstatus` is `1`, the result is available in the `jobresult` field of the response.
+
+## Example request
+
+```bash
+curl -s "http://192.0.2.10:8080/client/api?\
+command=listZones\
+&response=json\
+&apiKey=your-api-key\
+&signature=your-computed-signature"
+```
+
+See [API Authentication](/api/authentication) for how to compute the `signature` parameter.

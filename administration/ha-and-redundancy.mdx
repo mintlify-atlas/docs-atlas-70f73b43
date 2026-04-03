@@ -1,0 +1,238 @@
+---
+title: "High Availability and Redundancy"
+description: "Configure CloudStack for high availability: management server HA, host HA, VM HA, DRS, and maintenance procedures."
+---
+
+CloudStack provides high availability at multiple layers: the management server tier, individual hypervisor hosts, and individual virtual machines. Each layer is independently configurable.
+
+## Management server HA
+
+Multiple management server nodes can run simultaneously and share the same MySQL database. There is no active/passive designation — all nodes process API requests, and agents connect to whichever node they contacted first.
+
+<Steps>
+  <Step title="Deploy additional management server nodes">
+    Install CloudStack management server on each additional node using the same version. Point all nodes at the same MySQL instance or MySQL cluster.
+  </Step>
+  <Step title="Configure the database connection">
+    In `db.properties` on each node, set `db.cloud.host` to the MySQL host (or VIP) and enable JDBC HA properties such as `db.cloud.url` with `failover` or `replication` driver.
+  </Step>
+  <Step title="Configure MySQL replication">
+    Set up MySQL semi-synchronous or group replication between the database nodes. CloudStack does not manage MySQL replication; you must configure it at the database layer.
+  </Step>
+  <Step title="Place a load balancer in front of management servers">
+    Put an L4 or L7 load balancer (HAProxy, AWS ALB, etc.) in front of management server nodes. The UI and API endpoint your users hit should be the load balancer VIP, not individual nodes.
+  </Step>
+  <Step title="Verify multi-node operation">
+    Check **Infrastructure** > **Management Servers** in the UI. All running nodes appear with their heartbeat timestamp. Use the `listManagementServers` API to query node status programmatically.
+  </Step>
+</Steps>
+
+<Warning>
+  All management server nodes must run the same CloudStack version at all times. Do not mix versions except during a rolling upgrade window.
+</Warning>
+
+---
+
+## Host HA
+
+Host HA causes CloudStack to automatically restart VMs that were running on a host that becomes unreachable. It is distinct from VM HA (which is configured on service offerings) — host HA is the trigger mechanism; VM HA is the per-VM opt-in.
+
+### Enabling host HA
+
+<Steps>
+  <Step title="Mark the host as HA-enabled">
+    In the Admin UI: **Infrastructure** > **Hosts** > select host > **Enable HA**. Via API:
+    ```bash
+    cloudstack-api enableHAForHost hostid=<host-uuid>
+    ```
+  </Step>
+  <Step title="Assign an HA provider">
+    Each host type requires a compatible HA provider. The provider monitors host health and determines when to declare a host as fenced. Set `ha.tag` on a host or cluster to associate it with the appropriate HA provider plugin.
+  </Step>
+  <Step title="Configure HA settings">
+    | Setting | Default | Description |
+    |---------|---------|-------------|
+    | `ha.tag` | — | Tag used to identify HA-enabled host pools |
+    | `vm.ha.refreshed.on.update` | `false` | Re-evaluate HA state when a VM is updated |
+  </Step>
+</Steps>
+
+### HA planner: SkipHeuresticsPlanner
+
+CloudStack's HA planner (`SkipHeuresticsPlanner`) extends `FirstFitPlanner` and implements `HAPlanner`. Its key behavioral difference is that it **skips the cluster disable-threshold check** during HA-triggered deployments:
+
+> "Deploying vm during HA process, so skipping disable threshold check."
+
+This means a cluster that is over its normal capacity threshold can still receive VMs being restarted after a host failure. The reserved HA capacity is intended to accommodate exactly this scenario. The planner otherwise uses first-fit ordering across available hosts.
+
+<Note>
+  The HA planner is selected automatically by the HA framework when restarting VMs — you do not configure it manually. Its name is `SkipHeuresticsPlanner` (note the historical spelling).
+</Note>
+
+---
+
+## VM HA
+
+VM HA is configured at the service offering level via the **Enable HA** checkbox. When a host running HA-enabled VMs goes down, CloudStack's HA manager restarts those VMs on another suitable host using the HA planner.
+
+<Tabs>
+  <Tab title="UI">
+    Enable **HA** when creating or editing a **Compute Offering**. All VMs deployed from that offering inherit the HA setting. You can also override HA on an individual VM: **Instances** > select VM > **Configure HA**.
+  </Tab>
+  <Tab title="API">
+    ```bash
+    # Enable HA on an existing VM
+    cloudstack-api updateVirtualMachine id=<vm-uuid> haenable=true
+
+    # Check VM HA state
+    cloudstack-api listVirtualMachines id=<vm-uuid>
+    # Look for "haenable" field in the response
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## DRS (Distributed Resource Scheduler)
+
+CloudStack DRS automatically migrates VMs within a cluster to balance CPU and memory utilization across hosts. DRS is enabled and configured per-cluster.
+
+### DRS algorithms
+
+Two algorithms are available (`drs.algorithm` setting):
+
+<CardGroup cols={2}>
+  <Card title="balanced" icon="scale">
+    Keeps cluster resources evenly distributed. DRS is needed when the cluster imbalance exceeds `1.0 - drs.imbalance`. Each potential VM migration is scored by how much it reduces the pre-migration imbalance versus the post-migration imbalance.
+  </Card>
+  <Card title="condensed" icon="compress">
+    Packs VMs onto as few hosts as possible to free up hosts. DRS is needed when the cluster imbalance falls below `drs.imbalance`. Ignores metric values for hosts whose utilization exceeds `drs.imbalance.condensed.skip.threshold` to avoid skewed imbalance calculations.
+  </Card>
+</CardGroup>
+
+### DRS configuration keys (cluster-scoped)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `drs.automatic.enable` | `false` | Enable automatic periodic DRS execution on this cluster |
+| `drs.automatic.interval` | `60` | Minutes between automatic DRS runs |
+| `drs.max.migrations` | `50` | Maximum live migrations per DRS execution |
+| `drs.algorithm` | `balanced` | Algorithm to use: `balanced` or `condensed` |
+| `drs.imbalance` | `0.4` | Imbalance threshold. 1.0 = no imbalance allowed; 0.0 = full imbalance allowed |
+| `drs.metric` | `memory` | Resource to measure imbalance on: `memory` or `cpu` |
+| `drs.metric.type` | `used` | Whether to measure `used` or `free` resource |
+| `drs.metric.use.ratio` | `true` | Use ratio of metric to total (useful for heterogeneous hosts) |
+| `drs.imbalance.condensed.skip.threshold` | `0.95` | Ignore hosts above this utilization ratio when calculating condensed imbalance |
+| `drs.plan.expire.interval` | `30` | Days before old DRS plan records are cleaned up (global scope) |
+
+### Running DRS
+
+<Steps>
+  <Step title="Generate a DRS plan">
+    ```bash
+    cloudstack-api generateClusterDrsPlan clusterid=<cluster-uuid>
+    ```
+    Returns a plan with a list of recommended VM migrations. Review before executing.
+  </Step>
+  <Step title="Execute the plan">
+    ```bash
+    cloudstack-api executeClusterDrsPlan id=<plan-uuid>
+    ```
+    CloudStack performs up to `drs.max.migrations` live migrations. The plan transitions through `READY` → `IN_PROGRESS` → `COMPLETED` (or `FAILED`).
+  </Step>
+  <Step title="List plans">
+    ```bash
+    cloudstack-api listClusterDrsPlan clusterid=<cluster-uuid>
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Only one DRS plan can be in `READY` or `IN_PROGRESS` state for a given cluster at a time. Attempting to generate or execute a second plan while one is active returns an `InvalidParameterValueException`.
+</Note>
+
+---
+
+## Dedicated resources
+
+You can dedicate zones, pods, clusters, and hosts to specific domains or accounts to achieve hard isolation.
+
+<AccordionGroup>
+  <Accordion title="Dedicated zones">
+    ```bash
+    cloudstack-api dedicateZone zoneid=<zone-uuid> domainid=<domain-uuid>
+    # Optional: accountid=<account-uuid> for account-level dedication
+    ```
+    When a zone is dedicated, only the specified domain (and its subdomains) or account can deploy resources into it. Other accounts see the zone as unavailable.
+  </Accordion>
+  <Accordion title="Dedicated pods and clusters">
+    ```bash
+    cloudstack-api dedicatePod podid=<pod-uuid> domainid=<domain-uuid>
+    cloudstack-api dedicateCluster clusterid=<cluster-uuid> domainid=<domain-uuid>
+    ```
+  </Accordion>
+  <Accordion title="Dedicated hosts">
+    ```bash
+    cloudstack-api dedicateHost hostid=<host-uuid> domainid=<domain-uuid>
+    ```
+    Dedicated hosts only run VMs belonging to the specified domain or account. System VMs are not placed on dedicated hosts.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Maintenance mode
+
+Putting a host into maintenance mode gracefully live-migrates all running VMs off the host before stopping agent communication. Use this before performing host-level maintenance (kernel updates, hardware replacement).
+
+<Steps>
+  <Step title="Initiate maintenance mode">
+    In the UI: **Infrastructure** > **Hosts** > select host > **Enable Maintenance Mode**. Via API:
+    ```bash
+    cloudstack-api prepareHostForMaintenance id=<host-uuid>
+    ```
+    CloudStack live-migrates all VMs to other hosts in the same cluster. The host moves to `Prepare for Maintenance` state while migrations are in progress.
+  </Step>
+  <Step title="Wait for migrations to complete">
+    The host transitions to `Maintenance` state once all VMs have been migrated. Check progress:
+    ```bash
+    cloudstack-api listHosts id=<host-uuid>
+    # resourcestate should become "Maintenance"
+    ```
+  </Step>
+  <Step title="Perform maintenance">
+    With the host in `Maintenance` state, its agent is disconnected and CloudStack will not schedule any new VMs to it. Perform your host-level work.
+  </Step>
+  <Step title="Exit maintenance mode">
+    ```bash
+    cloudstack-api cancelHostMaintenance id=<host-uuid>
+    ```
+    The host reconnects its agent and returns to `Enabled` state, accepting new VM placements.
+  </Step>
+</Steps>
+
+<Warning>
+  If the cluster does not have enough capacity to absorb the VMs being migrated, maintenance mode will not complete. Resolve capacity or migrate VMs manually before initiating maintenance.
+</Warning>
+
+---
+
+## Rolling upgrades
+
+To upgrade a multi-node management server deployment without downtime:
+
+<Steps>
+  <Step title="Upgrade the database schema first">
+    Run the CloudStack database migration script on one node. The schema migration is safe to apply while other nodes are still running the old version.
+  </Step>
+  <Step title="Upgrade nodes one at a time">
+    Stop one management server node, upgrade its CloudStack packages to the new version, and start the service. Verify the node appears healthy in `listManagementServers` before proceeding to the next node.
+  </Step>
+  <Step title="Verify full cluster health">
+    Once all nodes are upgraded, confirm all nodes show recent heartbeat timestamps and no alerts are raised in the event log.
+  </Step>
+</Steps>
+
+<Tip>
+  The `listMgmtsMetrics` API returns per-node metrics including uptime, heap memory, thread counts, and TLS versions. Use this to verify a newly upgraded node is healthy before taking the next one offline.
+</Tip>

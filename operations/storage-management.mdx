@@ -1,0 +1,404 @@
+---
+title: "Storage Management"
+description: "Manage CloudStack storage: primary and secondary pools, volumes, snapshots, and disk offerings."
+---
+
+CloudStack separates storage into two categories: primary storage, where running VM disks live, and secondary storage, where templates, ISOs, and snapshots are archived. Both must be configured before VMs can be deployed.
+
+## Primary storage pools
+
+Primary storage holds the root and data disk volumes of running VMs. CloudStack supports cluster-scoped storage (accessible to all hosts in a cluster) and zone-scoped storage (accessible to all hosts in a zone).
+
+### Adding an NFS primary storage pool
+
+```bash
+# API: createStoragePool
+name=nfs-primary-01
+zoneid=<zone-uuid>
+podid=<pod-uuid>
+clusterid=<cluster-uuid>
+url=nfs://192.168.1.100/exports/cloudstack
+scope=Cluster
+```
+
+The URL format for NFS is: `nfs://<host>/<export-path>`
+
+### Adding an iSCSI primary storage pool
+
+For iSCSI, the URL follows the format: `iscsi://<host>/<iqn>/<lun>`
+
+```bash
+createStoragePool \
+  name=iscsi-primary-01 \
+  zoneid=<zone-uuid> \
+  podid=<pod-uuid> \
+  clusterid=<cluster-uuid> \
+  url=iscsi://192.168.1.200/iqn.2023-01.com.example:storage/0 \
+  scope=Cluster
+```
+
+### Adding a Ceph/RBD primary storage pool
+
+Use the `rbd://` URL scheme for Ceph RADOS Block Device storage. Pass Ceph-specific connection parameters in the `details` map:
+
+```bash
+createStoragePool \
+  name=ceph-primary-01 \
+  zoneid=<zone-uuid> \
+  clusterid=<cluster-uuid> \
+  url=rbd://192.168.1.10/cloudstack \
+  scope=Cluster \
+  provider=DefaultPrimary \
+  details[0].key=rados_monitor_ips \
+  details[0].value=192.168.1.10,192.168.1.11,192.168.1.12 \
+  details[1].key=rados_keyring \
+  details[1].value=AQC... \
+  details[2].key=pool \
+  details[2].value=cloudstack
+```
+
+### Zone-scoped storage
+
+To make a storage pool available to all hosts across the entire zone (not just one cluster), set `scope=Zone` and omit `podid` and `clusterid`. Zone-scoped pools also require specifying the hypervisor type:
+
+```bash
+createStoragePool \
+  name=ceph-zone-pool \
+  zoneid=<zone-uuid> \
+  url=rbd://192.168.1.10/cloudstack \
+  scope=Zone \
+  hypervisor=KVM
+```
+
+### Storage pool parameters
+
+| Parameter | Description |
+|---|---|
+| `name` | Human-readable pool name |
+| `url` | Protocol URL for connecting to the storage |
+| `tags` | Comma-separated storage tags for disk offering placement |
+| `scope` | `Cluster` or `Zone` |
+| `managed` | Whether CloudStack manages volume lifecycle on this pool |
+| `capacitybytes` | Reported capacity override (bytes) |
+| `capacityiops` | Total IOPS capacity CloudStack can provision |
+| `storageaccessgroups` | Comma-separated access groups (since 4.21.0) |
+| `istagarule` | If true, treat `tags` as a boolean rule expression |
+
+### Storage pool maintenance
+
+Before decommissioning a primary storage pool, put it into maintenance mode to migrate all volumes off:
+
+```bash
+# API: enableStorageMaintenanceMode
+id=<pool-uuid>
+```
+
+Wait for the pool state to become `Maintenance`, then safely remove it:
+
+```bash
+# API: deleteStoragePool
+id=<pool-uuid>
+```
+
+Cancel maintenance to return the pool to service:
+
+```bash
+# API: cancelStorageMaintenanceModeCmd — CancelPrimaryStorageMaintenanceCmd
+id=<pool-uuid>
+```
+
+## Secondary storage
+
+Secondary storage holds templates, ISOs, VM snapshots, and volume snapshots. It must be configured per zone.
+
+### Adding NFS secondary storage
+
+```bash
+# API: addImageStore
+name=secondary-nfs
+provider=NFS
+zoneid=<zone-uuid>
+url=nfs://192.168.1.150/exports/secondary
+```
+
+### Adding S3-compatible object storage
+
+Use the `S3` provider for any S3-compatible object store (AWS S3, MinIO, Ceph RADOS Gateway):
+
+```bash
+# API: addImageStore
+name=s3-secondary
+provider=S3
+details[0].key=accesskey&details[0].value=<access-key>
+details[1].key=secretkey&details[1].value=<secret-key>
+details[2].key=bucket&details[2].value=cloudstack-secondary
+details[3].key=endpoint&details[3].value=https://s3.example.com
+details[4].key=usehttps&details[4].value=true
+```
+
+<Note>
+  When using an S3-compatible store without a zone ID, the image store becomes a zone-agnostic global store. A zone ID is optional for S3 providers but required for NFS providers.
+</Note>
+
+### Object storage pools (since 4.19.0)
+
+For bucket storage exposed to end users, add an object storage pool:
+
+```bash
+# API: addObjectStoragePool
+name=minio-objects
+provider=MinIO
+url=https://minio.example.com
+details[0].key=accesskey&details[0].value=<key>
+details[1].key=secretkey&details[1].value=<secret>
+```
+
+## Volume operations
+
+### Creating a volume
+
+Create a standalone data volume from a disk offering, then attach it to a VM:
+
+```bash
+# API: createVolume
+name=data-vol-01
+diskofferingid=<disk-offering-uuid>
+zoneid=<zone-uuid>
+size=100    # GB (only for custom-size offerings)
+miniops=1000
+maxiops=5000
+```
+
+You can also create a volume from a snapshot:
+
+```bash
+createVolume \
+  name=restored-data \
+  snapshotid=<snapshot-uuid>
+```
+
+### Attaching and detaching volumes
+
+```bash
+# Attach a data volume to a running or stopped VM
+# API: attachVolume
+id=<volume-uuid>
+virtualmachineid=<vm-uuid>
+
+# Detach a data volume
+# API: detachVolume
+id=<volume-uuid>
+```
+
+<Warning>
+  Detaching a volume from a running VM does not unmount it within the guest OS. Always unmount the filesystem inside the VM before detaching to prevent data corruption.
+</Warning>
+
+### Resizing a volume
+
+```bash
+# API: resizeVolume — increase volume size
+id=<volume-uuid>
+size=200        # new size in GB (must be larger than current)
+miniops=2000
+maxiops=8000
+shrinkok=false  # set true only if you intend to shrink (dangerous)
+```
+
+### Migrating a volume
+
+Move a volume to a different primary storage pool while the VM is running (live migration) or stopped:
+
+```bash
+# API: migrateVolume
+volumeid=<volume-uuid>
+storageid=<target-pool-uuid>
+livemigrate=true   # set false for stopped VMs
+```
+
+### Volume lifecycle
+
+```bash
+# Soft-delete a detached volume (recoverable)
+# API: destroyVolume
+id=<volume-uuid>
+
+# Recover a destroyed volume
+# API: recoverVolume
+id=<volume-uuid>
+
+# Permanently delete
+# API: deleteVolume
+id=<volume-uuid>
+
+# Extract (download) a volume for external use
+# API: extractVolume
+id=<volume-uuid>
+zoneid=<zone-uuid>
+mode=HTTP_DOWNLOAD
+```
+
+## Snapshot management
+
+### On-demand snapshots
+
+```bash
+# API: createSnapshot — instant snapshot of a volume
+volumeid=<volume-uuid>
+name=pre-upgrade-backup
+quiescevm=true       # pause guest I/O for consistency
+asyncbackup=false    # wait for snapshot completion
+```
+
+CloudStack stores snapshots in secondary storage by default. For managed storage that supports it, you can use primary storage:
+
+```bash
+createSnapshot \
+  volumeid=<volume-uuid> \
+  locationtype=primary    # or 'secondary'
+```
+
+### Scheduled snapshot policies
+
+```bash
+# API: createSnapshotPolicy — daily snapshots at 02:00, keep 7
+volumeid=<volume-uuid>
+intervaltype=DAILY
+schedule=00:02
+timezone=US/Eastern
+maxsnaps=7
+```
+
+Interval types: `HOURLY`, `DAILY`, `WEEKLY`, `MONTHLY`.
+
+### Cross-zone snapshot replication
+
+Since CloudStack 4.19.0, snapshots can be replicated to multiple zones at creation time:
+
+```bash
+createSnapshot \
+  volumeid=<volume-uuid> \
+  zoneidlist=<zone-uuid-1>,<zone-uuid-2>
+```
+
+### Reverting from a snapshot
+
+```bash
+# API: revertSnapshot — restore volume to snapshot state
+id=<snapshot-uuid>
+```
+
+### Creating a volume from a snapshot
+
+```bash
+# API: createVolume
+name=restored-from-snapshot
+snapshotid=<snapshot-uuid>
+```
+
+### Creating a template from a snapshot
+
+Convert a volume snapshot to a reusable VM template:
+
+```bash
+# API: createTemplate
+name=golden-image-v2
+displaytext="Golden image from production snapshot"
+snapshotid=<snapshot-uuid>
+ostypeid=<os-type-uuid>
+requireshvm=true
+passwordenabled=true
+```
+
+## Disk offerings
+
+A disk offering defines the properties of volumes created from it. Administrators create disk offerings; users select from available offerings when creating volumes or deploying VMs.
+
+<AccordionGroup>
+  <Accordion title="Fixed-size disk offering">
+    The disk size is fixed and cannot be changed at creation time.
+
+    ```bash
+    # API: createDiskOffering
+    name=100gb-ssd
+    displaytext="100 GB SSD"
+    disksize=100     # GB
+    tags=ssd
+    ```
+  </Accordion>
+  <Accordion title="Custom-size disk offering">
+    The user specifies the size when creating the volume. Optionally set min/max size bounds.
+
+    ```bash
+    createDiskOffering \
+      name=custom-disk \
+      displaytext="Custom size disk" \
+      customized=true \
+      disksize=0          # ignored for custom offerings
+      miniops=0
+      maxiops=0
+    ```
+  </Accordion>
+  <Accordion title="Custom IOPS disk offering">
+    Allows users to specify their own IOPS values within administrator-defined bounds. Requires a storage backend that supports QoS.
+
+    ```bash
+    createDiskOffering \
+      name=custom-iops \
+      displaytext="Custom IOPS disk" \
+      customizediops=true \
+      miniops=100 \
+      maxiops=10000
+    ```
+  </Accordion>
+  <Accordion title="Storage tags for placement">
+    Tags on a disk offering are matched against storage pool tags to control where volumes are placed. A volume created from an offering tagged `ssd` will only be placed on storage pools also tagged `ssd`.
+
+    ```bash
+    createDiskOffering \
+      name=fast-disk \
+      disksize=50 \
+      tags=ssd,nvme
+    ```
+
+    To use a tag as a boolean placement rule expression instead of a simple list match, set `istagarule=true` on the storage pool.
+  </Accordion>
+</AccordionGroup>
+
+## Shared filesystem support
+
+CloudStack supports shared file systems for workloads that require concurrent multi-VM access (NFS-like semantics within a zone). Shared filesystems are backed by a dedicated storage offering:
+
+```bash
+# List available shared filesystem offerings
+listSharedFilesystemServiceOfferings
+
+# Create a shared filesystem
+createSharedFileSystem \
+  name=nfs-share-01 \
+  serviceofferingid=<shared-fs-offering-uuid> \
+  diskofferingid=<disk-offering-uuid> \
+  networkid=<network-uuid> \
+  size=500    # GB
+```
+
+VMs attach to the shared filesystem over the guest network using the NFS or CIFS protocol, without requiring direct storage fabric access.
+
+## Storage access groups (since 4.21.0)
+
+Storage access groups provide a security mechanism to restrict which hosts can access which storage pools, replacing reliance solely on network isolation.
+
+Set matching groups on both the storage pool and the hosts that should access it:
+
+```bash
+# On the storage pool
+createStoragePool ... storageaccessgroups=prod-storage
+
+# On a host
+addHost ... storageaccessgroups=prod-storage
+
+# On a cluster (applies to all hosts added to the cluster)
+addCluster ... storageaccessgroups=prod-storage
+```
+
+CloudStack enforces that a host can only mount volumes from storage pools that share at least one access group with the host.

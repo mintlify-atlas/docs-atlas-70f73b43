@@ -1,0 +1,410 @@
+---
+title: "Networking Setup"
+description: "Configure CloudStack networks: isolated networks, VPCs, public IPs, firewalls, load balancers, and VPN."
+---
+
+CloudStack networking is built around network offerings—configurable bundles of network services that define what capabilities a network provides. Understanding offerings is the foundation for all networking operations.
+
+## Network offerings
+
+A network offering defines the set of services available to networks created from it: DHCP, DNS, firewall, NAT, load balancing, VPN, and more. Each service can be provided by a different provider (CloudStack virtual router, external device, or none).
+
+<Tabs>
+  <Tab title="UI">
+    Navigate to **Service Offerings > Network Offerings** and click **Add network offering**. Configure:
+
+    - **Guest type**: `Isolated` or `Shared`
+    - **Supported services**: select the services (DHCP, Firewall, SourceNat, StaticNat, PortForwarding, Lb, UserData, VPN)
+    - **Service provider**: for each service, choose the provider (typically `VirtualRouter`)
+    - **Specify VLAN**: whether VLANs can be specified when creating networks from this offering
+  </Tab>
+  <Tab title="API">
+    ```bash
+    # API: createNetworkOffering
+    name=isolated-with-lb
+    displaytext="Isolated network with load balancer"
+    guestiptype=Isolated
+    supportedservices=Dhcp,Dns,Firewall,Lb,PortForwarding,SourceNat,StaticNat,UserData,Vpn
+    traffictype=GUEST
+    availability=Optional
+    serviceproviderlist[0].service=Dhcp&serviceproviderlist[0].provider=VirtualRouter
+    serviceproviderlist[1].service=Lb&serviceproviderlist[1].provider=VirtualRouter
+    ```
+  </Tab>
+</Tabs>
+
+## Creating isolated networks (Advanced zone)
+
+In an Advanced zone, each account can create isolated guest networks. Each isolated network gets a dedicated Virtual Router VM that provides DHCP, DNS, and gateway services.
+
+<Tabs>
+  <Tab title="UI">
+    Navigate to **Network > Guest Networks** and click **Add network**. Select your zone, choose an isolated network offering, and provide a name.
+  </Tab>
+  <Tab title="API">
+    ```bash
+    # API: createNetwork
+    name=app-network
+    networkofferingid=<offering-uuid>
+    zoneid=<zone-uuid>
+    displaytext="Application network"
+    ```
+
+    For networks inside a VPC, also provide:
+    ```bash
+    vpcid=<vpc-uuid>
+    gateway=10.0.1.1
+    netmask=255.255.255.0
+    ```
+  </Tab>
+</Tabs>
+
+Optionally customize per-network DNS servers (since 4.18.0):
+
+```bash
+dns1=8.8.8.8
+dns2=8.8.4.4
+ip6dns1=2001:4860:4860::8888
+```
+
+## VPC setup
+
+A VPC (Virtual Private Cloud) groups multiple isolated tier networks under a single CIDR block with shared routing. VPCs support private gateways, site-to-site VPN, and network ACLs.
+
+### Creating a VPC
+
+<Steps>
+  <Step title="Create the VPC">
+    ```bash
+    # API: createVPC
+    name=production-vpc
+    displaytext="Production VPC"
+    zoneid=<zone-uuid>
+    vpcofferingid=<vpc-offering-uuid>
+    cidr=10.0.0.0/16
+    networkdomain=internal.example.com
+    ```
+
+    The `cidr` defines the supernet for all tiers within the VPC. All tier networks must use CIDRs within this block.
+  </Step>
+  <Step title="Add tier networks">
+    Create networks with `vpcid` set and specify a CIDR within the VPC supernet:
+
+    ```bash
+    # API: createNetwork
+    name=web-tier
+    networkofferingid=<vpc-tier-offering-uuid>
+    zoneid=<zone-uuid>
+    vpcid=<vpc-uuid>
+    gateway=10.0.1.1
+    netmask=255.255.255.0
+    ```
+  </Step>
+  <Step title="Configure network ACLs">
+    Create an ACL list and add rules to control traffic between tiers:
+
+    ```bash
+    # Create ACL list
+    createNetworkACLList name=web-acl vpcid=<vpc-uuid>
+
+    # Add allow rule: permit HTTP from web tier to app tier
+    createNetworkACL \
+      aclid=<acl-uuid> \
+      protocol=TCP \
+      startport=80 \
+      endport=80 \
+      cidrlist=10.0.1.0/24 \
+      action=Allow \
+      traffictype=Ingress \
+      number=100
+    ```
+
+    Assign the ACL to a tier:
+    ```bash
+    replaceNetworkACLList aclid=<acl-uuid> networkid=<tier-uuid>
+    ```
+  </Step>
+  <Step title="Add a private gateway (optional)">
+    Connect the VPC to a private network via a dedicated gateway:
+
+    ```bash
+    # API: createPrivateGateway
+    vpcid=<vpc-uuid>
+    ipaddress=192.168.100.1
+    gateway=192.168.100.254
+    netmask=255.255.255.0
+    vlan=200
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Set `start=false` when creating a VPC to defer VPC Virtual Router allocation until the first tier network is implemented. This avoids consuming resources before the VPC is fully configured.
+</Tip>
+
+### VPC DNS and MTU
+
+Since CloudStack 4.18.0, VPCs support custom DNS servers and MTU configuration on the VR public interface:
+
+```bash
+createVPC ... \
+  ip4dns1=8.8.8.8 \
+  ip4dns2=8.8.4.4 \
+  publicmtu=1500
+```
+
+## Public IP management
+
+### Acquiring a public IP
+
+<Tabs>
+  <Tab title="UI">
+    Navigate to **Network > Public IP Addresses** and click **Acquire new IP**. Select the network or VPC.
+  </Tab>
+  <Tab title="API">
+    ```bash
+    # API: associateIpAddress
+    zoneid=<zone-uuid>
+    networkid=<network-uuid>   # for isolated network
+    # or
+    vpcid=<vpc-uuid>           # for VPC
+    ```
+  </Tab>
+</Tabs>
+
+### Source NAT
+
+Every isolated network and VPC automatically gets a source NAT IP when first instantiated. This IP is used for all outbound traffic from the network where no static NAT or port forwarding rule exists.
+
+You can explicitly specify the source NAT IP at network or VPC creation time (since 4.19):
+
+```bash
+createNetwork ... sourcenatip=203.0.113.10
+```
+
+### Releasing a public IP
+
+```bash
+# API: disassociateIpAddress
+id=<public-ip-uuid>
+```
+
+<Warning>
+  Releasing a public IP removes all port forwarding, static NAT, load balancing, and firewall rules associated with it. This action cannot be undone.
+</Warning>
+
+## Port forwarding and static NAT
+
+### Port forwarding rules
+
+Port forwarding maps a public IP and port to a private VM IP and port:
+
+```bash
+# API: createPortForwardingRule
+ipaddressid=<public-ip-uuid>
+privateport=22
+publicport=2222
+protocol=TCP
+virtualmachineid=<vm-uuid>
+```
+
+### Static NAT (1:1 NAT)
+
+Static NAT maps a public IP entirely to a single VM's private IP in both directions:
+
+```bash
+# API: enableStaticNat
+ipaddressid=<public-ip-uuid>
+virtualmachineid=<vm-uuid>
+
+# Disable static NAT
+disableStaticNat ipaddressid=<public-ip-uuid>
+```
+
+## Firewall rules and egress rules
+
+Firewall rules apply to public IP addresses and control inbound traffic reaching VMs through port forwarding or static NAT.
+
+```bash
+# API: createFirewallRule — allow inbound HTTPS to a public IP
+ipaddressid=<public-ip-uuid>
+protocol=TCP
+startport=443
+endport=443
+cidrlist=0.0.0.0/0
+type=user
+```
+
+Egress firewall rules control outbound traffic leaving the network through the Virtual Router:
+
+```bash
+# API: createEgressFirewallRule — allow VMs to reach external SMTP
+networkid=<network-uuid>
+protocol=TCP
+startport=587
+endport=587
+cidrlist=0.0.0.0/0
+```
+
+<Note>
+  By default, CloudStack isolated networks allow all egress traffic. If your network offering enables egress firewall, default egress is blocked and you must explicitly permit outbound traffic.
+</Note>
+
+## Load balancer rules
+
+### Creating a load balancer rule
+
+```bash
+# API: createLoadBalancerRule
+name=web-lb
+ipaddressid=<public-ip-uuid>
+privateport=80
+publicport=80
+algorithm=roundrobin   # roundrobin, leastconn, source
+```
+
+Supported algorithms: `roundrobin`, `leastconn`, `source`.
+
+### Adding VMs to a load balancer
+
+```bash
+# API: assignToLoadBalancerRule
+id=<lb-rule-uuid>
+virtualmachineids=<vm-uuid-1>,<vm-uuid-2>
+```
+
+### Stickiness policies
+
+Stickiness policies ensure a client is consistently routed to the same backend VM:
+
+```bash
+# API: createLBStickinessPolicy
+lbruleid=<lb-rule-uuid>
+methodname=AppCookie
+name=session-sticky
+param[0].name=cookieName&param[0].value=JSESSIONID
+```
+
+Supported methods: `LbCookie`, `AppCookie`, `SourceBased`.
+
+### Health check policies
+
+Configure health checks to remove unhealthy VMs from rotation:
+
+```bash
+# API: createLBHealthCheckPolicy
+lbruleid=<lb-rule-uuid>
+pingpath=/health
+intervaltime=10
+healthythreshold=2
+unhealthythreshold=3
+responsetimeout=5
+```
+
+## Site-to-site VPN
+
+Site-to-site VPN connects a VPC to a remote network over IPsec.
+
+<Steps>
+  <Step title="Create a VPN gateway">
+    ```bash
+    # API: createVpnGateway
+    vpcid=<vpc-uuid>
+    ```
+  </Step>
+  <Step title="Create a customer gateway">
+    ```bash
+    # API: createVpnCustomerGateway
+    name=on-prem-gw
+    gateway=203.0.113.1       # remote peer IP
+    cidrlist=192.168.0.0/24   # remote subnets
+    ipsecpsk=<pre-shared-key>
+    ikepolicy=aes128-sha1;modp1536
+    esppolicy=aes128-sha1
+    ikelifetime=86400
+    esplifetime=3600
+    ```
+  </Step>
+  <Step title="Create the VPN connection">
+    ```bash
+    # API: createVpnConnection
+    s2svpngatewayid=<vpn-gw-uuid>
+    s2scustomergatewayid=<customer-gw-uuid>
+    passive=false
+    ```
+  </Step>
+</Steps>
+
+## Remote access VPN
+
+Remote access VPN provides IPsec/L2TP VPN for individual user connections.
+
+```bash
+# Enable remote access VPN on a public IP
+# API: createRemoteAccessVpn
+publicipid=<public-ip-uuid>
+iprange=10.255.0.2-10.255.0.10   # IP range for VPN clients
+
+# Add a VPN user
+# API: addVpnUser
+username=alice
+password=<password>
+account=my-account
+domainid=<domain-uuid>
+```
+
+Users can then connect using any L2TP/IPsec VPN client with the public IP as the server address.
+
+## IPv6 network setup
+
+CloudStack supports IPv6 for guest networks in Advanced zones.
+
+<Tabs>
+  <Tab title="Isolated IPv6 network">
+    Create a network offering that includes IPv6 support, then create the network with an IPv6 CIDR (minimum /64):
+
+    ```bash
+    # API: createNetwork
+    name=ipv6-network
+    networkofferingid=<ipv6-offering-uuid>
+    zoneid=<zone-uuid>
+    ip6cidr=2001:db8:1::/64
+    ip6gateway=2001:db8:1::1
+    ```
+  </Tab>
+  <Tab title="Dual-stack network">
+    For both IPv4 and IPv6 on the same network, provide both IPv4 and IPv6 parameters:
+
+    ```bash
+    createNetwork \
+      name=dual-stack \
+      networkofferingid=<dual-stack-offering-uuid> \
+      zoneid=<zone-uuid> \
+      gateway=10.10.1.1 \
+      netmask=255.255.255.0 \
+      ip6cidr=2001:db8:1::/64 \
+      ip6gateway=2001:db8:1::1 \
+      ip6dns1=2001:4860:4860::8888
+    ```
+  </Tab>
+</Tabs>
+
+When deploying a VM into an IPv6-enabled network, you can request a specific IPv6 address:
+
+```bash
+deployVirtualMachine \
+  ... \
+  networkids=<network-uuid> \
+  ip6address=2001:db8:1::42
+```
+
+## BGP routing (since 4.20.0)
+
+CloudStack supports BGP (Border Gateway Protocol) for routing between VPCs/networks and the physical infrastructure. Assign an AS number to a VPC or network at creation time:
+
+```bash
+createVPC ... asnumber=65001
+createNetwork ... asnumber=65001
+```
+
+BGP peering is configured through the physical network layer and requires compatible router infrastructure.

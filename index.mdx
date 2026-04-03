@@ -1,97 +1,77 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Apache CloudStack Documentation"
+description: "Open-source IaaS cloud computing platform for deploying and managing large-scale virtual machine infrastructure across multiple hypervisors."
 ---
 
-## Setting up
+Apache CloudStack is a production-ready, open-source Infrastructure as a Service (IaaS) platform used by hundreds of organizations worldwide to build public, private, and hybrid clouds. It provides compute orchestration, networking, storage management, user accounts, and a full-featured API — all in a single platform.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get CloudStack running with the simulator in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="server" href="/installation">
+    Deploy CloudStack on bare metal or virtual infrastructure
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Architecture" icon="building-columns" href="/architecture/overview">
+    Understand zones, pods, clusters, and how CloudStack is structured
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the full CloudStack query API with examples
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can do with CloudStack
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Manage Virtual Machines" icon="display" href="/operations/virtual-machines">
+    Deploy, resize, migrate, and snapshot VMs across hypervisors
+  </Card>
+  <Card title="Configure Networking" icon="network-wired" href="/operations/networking-setup">
+    Set up VPCs, load balancers, firewalls, VPNs, and public IPs
+  </Card>
+  <Card title="Orchestrate Storage" icon="hard-drive" href="/operations/storage-management">
+    Manage primary and secondary storage, volumes, and snapshots
+  </Card>
+  <Card title="Kubernetes Integration" icon="dharmachakra" href="/integrations/kubernetes">
+    Provision managed Kubernetes clusters with CloudStack Kubernetes Service
+  </Card>
+  <Card title="Multi-Tenancy" icon="users" href="/operations/user-accounts">
+    Organize resources with domains, accounts, projects, and roles
+  </Card>
+  <Card title="High Availability" icon="shield-halved" href="/administration/ha-and-redundancy">
+    Configure HA for hosts and VMs to minimize downtime
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Getting started
 
-## Need inspiration?
+<Steps>
+  <Step title="Install CloudStack Management Server">
+    Set up the management server on a supported Linux distribution (Ubuntu or RHEL/CentOS). See the [installation guide](/installation) for full instructions.
+  </Step>
+  <Step title="Configure a Zone">
+    Define a zone, pod, cluster, and add hypervisor hosts. CloudStack supports KVM, VMware vSphere, XenServer, XCP-ng, and Hyper-V.
+  </Step>
+  <Step title="Add storage and network">
+    Configure primary storage for VM disk I/O and secondary storage for templates and snapshots. Set up a network offering for your VMs.
+  </Step>
+  <Step title="Launch your first VM">
+    Use the web UI, CLI, or API to deploy a virtual machine from a registered template. Access it via the console or SSH.
+  </Step>
+</Steps>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+## Supported hypervisors
+
+CloudStack manages workloads across the industry's most popular hypervisors from a single control plane:
+
+| Hypervisor | Use Case |
+|---|---|
+| **KVM** | Open-source, Linux-native, recommended for new deployments |
+| **VMware vSphere** | Enterprise VMware environments |
+| **XenServer / XCP-ng** | Xen-based deployments |
+| **Hyper-V** | Windows Server environments |
+| **OVM / LXC** | Container and Oracle VM workloads |
+
+<Note>
+  CloudStack 4.x supports multiple hypervisors within the same cloud deployment. You can run KVM and VMware hosts in different zones within a single CloudStack installation.
+</Note>

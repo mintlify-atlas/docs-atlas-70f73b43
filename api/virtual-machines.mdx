@@ -1,0 +1,606 @@
+---
+title: "Virtual Machines API"
+description: "CloudStack API reference for virtual machine operations: deploy, list, start, stop, migrate, and more."
+---
+
+## deployVirtualMachine
+
+Creates and automatically starts an instance based on a service offering, disk offering, and template.
+
+**Async:** Yes
+
+```
+GET /client/api?command=deployVirtualMachine
+```
+
+### Request parameters
+
+<ParamField query="serviceofferingid" type="uuid" required>
+  The ID of the service offering for the instance.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid" required>
+  The availability zone ID in which to deploy the instance.
+</ParamField>
+
+<ParamField query="templateid" type="uuid">
+  The ID of the template for the instance. Exactly one of `templateid`, `volumeid`, or `snapshotid` must be provided.
+</ParamField>
+
+<ParamField query="volumeid" type="uuid">
+  The ID of a volume to use as the root disk. Mutually exclusive with `templateid` and `snapshotid`. Introduced in 4.21.
+</ParamField>
+
+<ParamField query="snapshotid" type="uuid">
+  The ID of a snapshot to deploy from. Mutually exclusive with `templateid` and `volumeid`. Introduced in 4.21.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Host name for the virtual machine. Must be RFC-compliant domain name format.
+</ParamField>
+
+<ParamField query="displayname" type="string">
+  An optional user-generated display name for the virtual machine.
+</ParamField>
+
+<ParamField query="networkids" type="uuid[]">
+  Comma-separated list of network IDs. Cannot be specified together with `iptonetworklist`.
+</ParamField>
+
+<ParamField query="diskofferingid" type="uuid">
+  The ID of the disk offering. For template-based deployments, this creates a data disk. For ISO-based deployments, this is the root disk offering.
+</ParamField>
+
+<ParamField query="size" type="long">
+  Arbitrary size in GB for the data disk. Mutually exclusive with `diskofferingid`.
+</ParamField>
+
+<ParamField query="rootdisksize" type="long">
+  Optional size in GB to resize the root disk on deploy. Only applies to template-based deployments.
+</ParamField>
+
+<ParamField query="keypairs" type="string[]">
+  Names of SSH key pairs used to log in to the virtual machine.
+</ParamField>
+
+<ParamField query="securitygroupids" type="uuid[]">
+  Comma-separated list of security group IDs. Used in Basic network zones. Mutually exclusive with `securitygroupnames`.
+</ParamField>
+
+<ParamField query="userdata" type="string">
+  Optional base64-encoded binary data sent to the virtual machine on successful deployment. Max 4 KB via GET, 1 MB via POST.
+</ParamField>
+
+<ParamField query="ipaddress" type="string">
+  IP address for the default network interface.
+</ParamField>
+
+<ParamField query="affinitygroupids" type="uuid[]">
+  Comma-separated list of affinity group IDs. Mutually exclusive with `affinitygroupnames`.
+</ParamField>
+
+<ParamField query="startvm" type="boolean" default="true">
+  If `true`, the instance is started immediately after creation.
+</ParamField>
+
+<ParamField query="hypervisor" type="string">
+  The hypervisor type. Required only when the template or ISO does not specify one.
+</ParamField>
+
+<ParamField query="account" type="string">
+  The account to deploy the instance into. Must be used with `domainid`.
+</ParamField>
+
+<ParamField query="domainid" type="uuid">
+  The domain ID for the instance. Required when `account` is specified.
+</ParamField>
+
+<ParamField query="projectid" type="uuid">
+  Deploy the instance for a specific project.
+</ParamField>
+
+<ParamField query="boottype" type="string">
+  Guest VM boot option: `BIOS` or `UEFI`. Introduced in 4.14.
+</ParamField>
+
+<ParamField query="bootmode" type="string">
+  Boot mode when `boottype=UEFI`: `LEGACY` or `SECURE`. Introduced in 4.14.
+</ParamField>
+
+<ParamField query="dynamicscalingenabled" type="boolean">
+  If `true`, the instance supports dynamic CPU/memory scaling. Introduced in 4.16.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id" type="string">
+  The UUID of the virtual machine.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  The name of the virtual machine.
+</ResponseField>
+
+<ResponseField name="displayname" type="string">
+  The display name of the virtual machine.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  Current state: `Running`, `Stopped`, `Starting`, `Stopping`, `Destroyed`, `Expunging`, `Migrating`, `Error`, `Unknown`.
+</ResponseField>
+
+<ResponseField name="zoneid" type="string">
+  The UUID of the availability zone.
+</ResponseField>
+
+<ResponseField name="zonename" type="string">
+  The name of the availability zone.
+</ResponseField>
+
+<ResponseField name="templateid" type="string">
+  UUID of the template used to create the instance.
+</ResponseField>
+
+<ResponseField name="templatename" type="string">
+  Name of the template.
+</ResponseField>
+
+<ResponseField name="serviceofferingid" type="string">
+  UUID of the service offering.
+</ResponseField>
+
+<ResponseField name="serviceofferingname" type="string">
+  Name of the service offering.
+</ResponseField>
+
+<ResponseField name="cpunumber" type="integer">
+  Number of CPUs allocated to the instance.
+</ResponseField>
+
+<ResponseField name="memory" type="integer">
+  Memory allocated in megabytes.
+</ResponseField>
+
+<ResponseField name="ipaddress" type="string">
+  The first IP address of the instance.
+</ResponseField>
+
+<ResponseField name="created" type="string">
+  Creation timestamp in ISO 8601 format.
+</ResponseField>
+
+<ResponseField name="account" type="string">
+  The account that owns this instance.
+</ResponseField>
+
+<ResponseField name="jobid" type="string">
+  The async job ID. Present only when the command is asynchronous.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=deployVirtualMachine\
+&serviceofferingid=8dcd6b3c-f02e-4a6e-9b4c-abc123456789\
+&templateid=3a5d2f7e-...\
+&zoneid=a2f3de84-...\
+&name=web-server-01\
+&networkids=9c4e3b1a-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listVirtualMachines
+
+Lists instances owned by the account.
+
+```
+GET /client/api?command=listVirtualMachines
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid">
+  Filter by a specific instance UUID. Mutually exclusive with `ids`.
+</ParamField>
+
+<ParamField query="ids" type="uuid[]">
+  Comma-separated list of instance UUIDs. Mutually exclusive with `id`. Introduced in 4.4.
+</ParamField>
+
+<ParamField query="name" type="string">
+  Filter by name (substring match).
+</ParamField>
+
+<ParamField query="state" type="string">
+  Filter by state: `Running`, `Stopped`, `Present`, `Destroyed`, `Expunged`.
+</ParamField>
+
+<ParamField query="zoneid" type="uuid">
+  Filter by availability zone.
+</ParamField>
+
+<ParamField query="networkid" type="uuid">
+  Filter by network ID.
+</ParamField>
+
+<ParamField query="templateid" type="uuid">
+  Filter by template ID.
+</ParamField>
+
+<ParamField query="vpcid" type="uuid">
+  Filter by VPC ID.
+</ParamField>
+
+<ParamField query="affinitygroupid" type="uuid">
+  Filter by affinity group ID.
+</ParamField>
+
+<ParamField query="securitygroupid" type="uuid">
+  Filter by security group ID. Introduced in 4.15.
+</ParamField>
+
+<ParamField query="serviceofferingid" type="uuid">
+  Filter by service offering ID. Introduced in 4.4.
+</ParamField>
+
+<ParamField query="groupid" type="uuid">
+  Filter by instance group ID.
+</ParamField>
+
+<ParamField query="userid" type="uuid">
+  Filter by the user who created the instance.
+</ParamField>
+
+<ParamField query="hypervisor" type="string">
+  Filter by hypervisor type.
+</ParamField>
+
+<ParamField query="keypair" type="string">
+  Filter by SSH keypair name.
+</ParamField>
+
+<ParamField query="haenable" type="boolean">
+  Filter by HA offering: `true` for HA-enabled instances, `false` for HA-disabled. Introduced in 4.15.
+</ParamField>
+
+<ParamField query="details" type="string[]">
+  Comma-separated list of detail groups to include: `all`, `group`, `nics`, `stats`, `secgrp`, `tmpl`, `servoff`, `diskoff`, `backoff`, `iso`, `volume`, `min`, `affgrp`.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination (1-indexed).
+</ParamField>
+
+<ParamField query="pagesize" type="integer">
+  Number of results per page.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listVirtualMachines\
+&state=Running\
+&zoneid=a2f3de84-...\
+&page=1\
+&pagesize=50\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## startVirtualMachine
+
+Starts a stopped instance.
+
+**Async:** Yes
+
+```
+GET /client/api?command=startVirtualMachine
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  The UUID of the instance to start.
+</ParamField>
+
+<ParamField query="hostid" type="uuid">
+  Destination host UUID to start the instance on. Available to root admin only.
+</ParamField>
+
+<ParamField query="podid" type="uuid">
+  Destination pod UUID. Available to root admin only.
+</ParamField>
+
+<ParamField query="clusterid" type="uuid">
+  Destination cluster UUID. Available to root admin only.
+</ParamField>
+
+<ParamField query="bootintosetup" type="boolean">
+  If `true`, boots into the hardware setup menu. Introduced in 4.15.
+</ParamField>
+
+<ParamField query="considerlasthost" type="boolean" default="true">
+  If `true`, CloudStack first tries the last host on which the instance ran. Introduced in 4.18. Admin only.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=startVirtualMachine\
+&id=b2e4f1a0-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## stopVirtualMachine
+
+Stops a running instance.
+
+**Async:** Yes
+
+```
+GET /client/api?command=stopVirtualMachine
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  The UUID of the instance to stop.
+</ParamField>
+
+<ParamField query="forced" type="boolean" default="false">
+  If `true`, the instance is marked as Stopped even if the stop command fails to reach the hypervisor. Use only when you are certain the instance is already stopped.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=stopVirtualMachine\
+&id=b2e4f1a0-...\
+&forced=false\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## rebootVirtualMachine
+
+Reboots a running instance.
+
+**Async:** Yes
+
+```
+GET /client/api?command=rebootVirtualMachine
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  The UUID of the instance to reboot.
+</ParamField>
+
+<ParamField query="forced" type="boolean" default="false">
+  If `true`, forces a power-cycle instead of a graceful OS reboot.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=rebootVirtualMachine\
+&id=b2e4f1a0-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## destroyVirtualMachine
+
+Destroys an instance. The instance is moved to a `Destroyed` state and can be recovered or expunged.
+
+**Async:** Yes
+
+```
+GET /client/api?command=destroyVirtualMachine
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  The UUID of the instance to destroy.
+</ParamField>
+
+<ParamField query="expunge" type="boolean" default="false">
+  If `true`, the instance is expunged immediately instead of being recoverable for the expunge interval.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=destroyVirtualMachine\
+&id=b2e4f1a0-...\
+&expunge=false\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## migrateVirtualMachine
+
+Migrates an instance to another host. The instance must be in `Running` state.
+
+**Async:** Yes
+
+```
+GET /client/api?command=migrateVirtualMachine
+```
+
+### Request parameters
+
+<ParamField query="virtualmachineid" type="uuid" required>
+  The UUID of the instance to migrate.
+</ParamField>
+
+<ParamField query="hostid" type="uuid">
+  Destination host UUID. If omitted, CloudStack selects a suitable host automatically.
+</ParamField>
+
+<ParamField query="storageid" type="uuid">
+  Destination storage pool UUID (for storage migration).
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=migrateVirtualMachine\
+&virtualmachineid=b2e4f1a0-...\
+&hostid=d4f1a2b3-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## updateVirtualMachine
+
+Updates properties of an existing instance such as its display name, user data, or HA setting.
+
+```
+GET /client/api?command=updateVirtualMachine
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  The UUID of the instance to update.
+</ParamField>
+
+<ParamField query="displayname" type="string">
+  New display name for the instance.
+</ParamField>
+
+<ParamField query="haenable" type="boolean">
+  Enable or disable high availability for this instance.
+</ParamField>
+
+<ParamField query="userdata" type="string">
+  Updated base64-encoded user data.
+</ParamField>
+
+<ParamField query="ostypeid" type="uuid">
+  UUID of the OS type to update the guest OS classification.
+</ParamField>
+
+<ParamField query="details" type="map">
+  Key/value pairs for custom instance details.
+</ParamField>
+
+<ParamField query="dynamicscalingenabled" type="boolean">
+  Enable or disable dynamic CPU/memory scaling.
+</ParamField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=updateVirtualMachine\
+&id=b2e4f1a0-...\
+&displayname=new-web-server\
+&haenable=true\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## listVirtualMachineMetrics
+
+Returns metrics (CPU, network, disk I/O) for instances. Extends `listVirtualMachines` with additional stats fields.
+
+```
+GET /client/api?command=listVirtualMachineMetrics
+```
+
+Accepts the same filter parameters as `listVirtualMachines`. The response includes additional fields:
+
+<ResponseField name="cputotal" type="string">
+  Total CPU usage across all vCPUs, expressed as a percentage.
+</ResponseField>
+
+<ResponseField name="cpuused" type="string">
+  CPU usage percentage of the instance.
+</ResponseField>
+
+<ResponseField name="networkkbsread" type="long">
+  Network traffic received in KB/s.
+</ResponseField>
+
+<ResponseField name="networkkbswrite" type="long">
+  Network traffic transmitted in KB/s.
+</ResponseField>
+
+<ResponseField name="diskioread" type="long">
+  Disk read throughput in IOPS.
+</ResponseField>
+
+<ResponseField name="diskiowrite" type="long">
+  Disk write throughput in IOPS.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=listVirtualMachineMetrics\
+&id=b2e4f1a0-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
+
+---
+
+## getVMPassword
+
+Returns the password of a virtual machine if password-enabled templates were used to create it.
+
+```
+GET /client/api?command=getVMPassword
+```
+
+### Request parameters
+
+<ParamField query="id" type="uuid" required>
+  The UUID of the virtual machine.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="encryptedpassword" type="string">
+  The encrypted password. If the instance was deployed from a password-enabled template and `reset password` is supported by the hypervisor, this contains the current password.
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://192.0.2.10:8080/client/api?\
+command=getVMPassword\
+&id=b2e4f1a0-...\
+&apiKey=your-api-key\
+&signature=your-signature"
+```
